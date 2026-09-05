@@ -146,12 +146,66 @@ def get_sale(sale_id: int, db: Session = Depends(get_db)):
     return _serialize(_load_sale(db, sale_id))
 
 
+def _item_totals(sale: Sale) -> dict[int, int]:
+    """Satistaki her urun icin toplam miktar. Ayni urun birden fazla satirda olabilir."""
+    totals = {}
+    for item in sale.items:
+        totals[item.product_id] = totals.get(item.product_id, 0) + item.quantity
+    return totals
+
+
 @router.put('/{sale_id}', response_model=SaleResponse)
 def update_sale_status(
     sale_id: int, payload: SaleStatusUpdate, db: Session = Depends(get_db)
 ):
+    """Satis durumunu gunceller ve stogu duruma gore geri ekler/yeniden duser.
+
+    Stok mantigi: "cancelled" disindaki her durumda satis stogu tutuyor sayilir.
+    - cancelled disi -> cancelled : stok geri eklenir
+    - cancelled -> cancelled disi : stok yeniden dusulur (yetersizse 400)
+    - ayni gruptaki gecisler (pending <-> completed) stogu etkilemez
+
+    Durum degismiyorsa hicbir stok hareketi olmaz, bu sayede ayni istegi
+    tekrarlamak stogu ikinci kez degistirmez (idempotent).
+    """
     sale = _load_sale(db, sale_id)
-    sale.status = payload.status
+    old_status = sale.status
+    new_status = payload.status
+
+    was_cancelled = old_status == 'cancelled'
+    will_be_cancelled = new_status == 'cancelled'
+
+    # Stok yalnizca "iptal" sinirini gecerken hareket eder
+    restore_stock = not was_cancelled and will_be_cancelled
+    deduct_stock = was_cancelled and not will_be_cancelled
+
+    if deduct_stock:
+        # Iptal geri alindi: stok yeniden dusulecek, once yeterli mi kontrol et
+        for product_id, quantity in _item_totals(sale).items():
+            product = db.get(Product, product_id)
+            if product is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f'Product {product_id} bulunamadi, satis geri alinamiyor',
+                )
+            available = product.stock or 0
+            if available < quantity:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f'Iptal geri alinamiyor: "{product.name}" icin stok yetersiz. '
+                        f'{quantity} adet gerekli, stokta {available} adet var'
+                    ),
+                )
+
+    if restore_stock or deduct_stock:
+        sign = 1 if restore_stock else -1
+        for product_id, quantity in _item_totals(sale).items():
+            product = db.get(Product, product_id)
+            if product is not None:
+                product.stock = (product.stock or 0) + sign * quantity
+
+    sale.status = new_status
     try:
         db.commit()
     except SQLAlchemyError as exc:

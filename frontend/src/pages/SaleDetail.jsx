@@ -59,10 +59,18 @@ export default function SaleDetail() {
   const changeStatus = async (status) => {
     setBusy(true);
     setError('');
+    const wasCancelled = sale.status === 'cancelled';
     try {
       const updated = await salesAPI.updateStatus(sale.id, status);
       setSale(updated);
-      setNotice(`Satis durumu "${statusLabel[status] ?? status}" olarak guncellendi.`);
+      let message = `Satis durumu "${statusLabel[status] ?? status}" olarak guncellendi.`;
+      // Stok yalnizca "iptal" sinirini gecerken hareket eder
+      if (!wasCancelled && status === 'cancelled') {
+        message += ' Bu satistaki urunler stoga geri eklendi.';
+      } else if (wasCancelled && status !== 'cancelled') {
+        message += ' Bu satistaki urunler stoktan tekrar dusuldu.';
+      }
+      setNotice(message);
     } catch (err) {
       setError(err.message);
     } finally {
