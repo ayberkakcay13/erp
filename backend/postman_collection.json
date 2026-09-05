@@ -1,0 +1,182 @@
+{
+  "info": {
+    "name": "ERP System API",
+    "description": "FastAPI + SQLAlchemy + Supabase. base_url degiskenini ayarla: http://localhost:8000",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000" },
+    { "key": "customer_id", "value": "1" },
+    { "key": "product_id", "value": "1" },
+    { "key": "sale_id", "value": "1" },
+    { "key": "invoice_id", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Root",
+          "request": { "method": "GET", "url": "{{base_url}}/" }
+        },
+        {
+          "name": "Health check",
+          "request": { "method": "GET", "url": "{{base_url}}/health" }
+        }
+      ]
+    },
+    {
+      "name": "Customers",
+      "item": [
+        {
+          "name": "Create customer",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/customers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Mehmet Demir\",\n  \"email\": \"mehmet@ornek.com\",\n  \"phone\": \"05321234567\"\n}"
+            }
+          }
+        },
+        {
+          "name": "List customers",
+          "request": { "method": "GET", "url": "{{base_url}}/api/customers?skip=0&limit=100" }
+        },
+        {
+          "name": "Get customer",
+          "request": { "method": "GET", "url": "{{base_url}}/api/customers/{{customer_id}}" }
+        },
+        {
+          "name": "Update customer",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/customers/{{customer_id}}",
+            "body": { "mode": "raw", "raw": "{\n  \"phone\": \"05559998877\"\n}" }
+          }
+        },
+        {
+          "name": "Delete customer",
+          "request": { "method": "DELETE", "url": "{{base_url}}/api/customers/{{customer_id}}" }
+        }
+      ]
+    },
+    {
+      "name": "Products",
+      "item": [
+        {
+          "name": "Create product",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/products",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Klavye\",\n  \"sku\": \"SKU-KLV-100\",\n  \"price\": 750.50,\n  \"stock\": 50\n}"
+            }
+          }
+        },
+        {
+          "name": "List products",
+          "request": { "method": "GET", "url": "{{base_url}}/api/products?skip=0&limit=100" }
+        },
+        {
+          "name": "Get product",
+          "request": { "method": "GET", "url": "{{base_url}}/api/products/{{product_id}}" }
+        },
+        {
+          "name": "Update product (stock)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/products/{{product_id}}",
+            "body": { "mode": "raw", "raw": "{\n  \"stock\": 42\n}" }
+          }
+        },
+        {
+          "name": "Delete product",
+          "request": { "method": "DELETE", "url": "{{base_url}}/api/products/{{product_id}}" }
+        }
+      ]
+    },
+    {
+      "name": "Sales",
+      "item": [
+        {
+          "name": "Create sale (2 urun)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/sales",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customer_id\": {{customer_id}},\n  \"sale_date\": \"2026-09-05\",\n  \"items\": [\n    { \"product_id\": 1, \"quantity\": 3, \"unit_price\": 750.50 },\n    { \"product_id\": 2, \"quantity\": 2, \"unit_price\": 4200.00 }\n  ]\n}"
+            },
+            "description": "total_amount otomatik hesaplanir: 3*750.50 + 2*4200 = 10651.50"
+          }
+        },
+        {
+          "name": "List sales",
+          "request": { "method": "GET", "url": "{{base_url}}/api/sales?skip=0&limit=100" }
+        },
+        {
+          "name": "List sales (musteri filtresi)",
+          "request": { "method": "GET", "url": "{{base_url}}/api/sales?customer_id={{customer_id}}" }
+        },
+        {
+          "name": "Get sale (detayli)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/sales/{{sale_id}}",
+            "description": "Response: musteri bilgisi + tum items + her item'in urun adi ve SKU'su"
+          }
+        },
+        {
+          "name": "Update sale status",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/sales/{{sale_id}}",
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"completed\"\n}" },
+            "description": "status: pending | completed | cancelled"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Invoices",
+      "item": [
+        {
+          "name": "Generate invoice from sale",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/sales/{{sale_id}}/invoice",
+            "body": { "mode": "raw", "raw": "{\n  \"tax_rate\": 0.20\n}" },
+            "description": "tax_rate opsiyonel (0.20 = %20 KDV). Ayni sale icin ikinci fatura 409 doner."
+          }
+        },
+        {
+          "name": "List invoices",
+          "request": { "method": "GET", "url": "{{base_url}}/api/invoices" }
+        },
+        {
+          "name": "Get invoice",
+          "request": { "method": "GET", "url": "{{base_url}}/api/invoices/{{invoice_id}}" }
+        },
+        {
+          "name": "Update invoice status",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/invoices/{{invoice_id}}",
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"paid\"\n}" },
+            "description": "status: draft | issued | paid"
+          }
+        }
+      ]
+    }
+  ]
+}

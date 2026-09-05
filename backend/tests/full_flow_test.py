@@ -1,0 +1,116 @@
+"""Adim 8: uctan uca senaryo testi (urllib ile, ekstra bagimlilik yok)."""
+import json
+import time
+import urllib.error
+import urllib.request
+
+BASE = 'http://127.0.0.1:8000'
+failures = []
+
+
+def call(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        BASE + path, data=data, method=method,
+        headers={'Content-Type': 'application/json'},
+    )
+    try:
+        with urllib.request.urlopen(req) as r:
+            raw = r.read().decode()
+            return r.status, (json.loads(raw) if raw else None)
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode()
+        return e.code, (json.loads(raw) if raw else None)
+
+
+def check(label, cond, detail=''):
+    print(('  OK   ' if cond else '  FAIL ') + label + (f'  [{detail}]' if detail else ''))
+    if not cond:
+        failures.append(label)
+
+
+suffix = str(int(time.time()))
+
+print('\n1. Customer olustur')
+code, cust = call('POST', '/api/customers', {
+    'name': 'Zeynep Kaya', 'email': f'zeynep{suffix}@ornek.com', 'phone': '05441112233'})
+check('POST /api/customers -> 201', code == 201, f'HTTP {code}')
+cid = cust['id']
+print(f'   customer_id = {cid}')
+
+print('\n2. 3 Product olustur')
+pids = []
+specs = [('Mouse', 450.0, 100), ('Kulaklik', 1250.0, 40), ('Webcam', 890.0, 25)]
+for name, price, stock in specs:
+    code, p = call('POST', '/api/products', {
+        'name': name, 'sku': f'SKU-{name.upper()[:3]}-{suffix}',
+        'price': price, 'stock': stock})
+    check(f'POST /api/products ({name}) -> 201', code == 201, f'HTTP {code}')
+    pids.append(p['id'])
+print(f'   product_ids = {pids}')
+
+print('\n3. Sale olustur (2 urun)')
+code, sale = call('POST', '/api/sales', {
+    'customer_id': cid, 'sale_date': '2026-09-05',
+    'items': [
+        {'product_id': pids[0], 'quantity': 4, 'unit_price': 450.0},
+        {'product_id': pids[1], 'quantity': 2, 'unit_price': 1250.0},
+    ]})
+check('POST /api/sales -> 201', code == 201, f'HTTP {code}')
+expected = 4 * 450.0 + 2 * 1250.0
+check(f'total_amount == {expected}', abs(sale['total_amount'] - expected) < 0.01,
+      f"gelen: {sale['total_amount']}")
+sid = sale['id']
+print(f'   sale_id = {sid}')
+
+print('\n4. Sale bilgisini GET ile cek (detayli response)')
+code, got = call('GET', f'/api/sales/{sid}')
+check('GET /api/sales/{id} -> 200', code == 200, f'HTTP {code}')
+check('customer bilgisi var', got.get('customer') is not None)
+check('customer adi dogru', got['customer']['name'] == 'Zeynep Kaya')
+check('2 item dondu', len(got['items']) == 2, f"{len(got['items'])} item")
+check('item urun isimleri dolu', all(i['product_name'] for i in got['items']),
+      ', '.join(str(i['product_name']) for i in got['items']))
+check('item SKU\'lari dolu', all(i['product_sku'] for i in got['items']))
+check('satir toplamlari dogru',
+      all(abs(i['total_price'] - i['quantity'] * i['unit_price']) < 0.01 for i in got['items']))
+
+print('\n5. Invoice olustur (KDV %20)')
+code, inv = call('POST', f'/api/sales/{sid}/invoice', {'tax_rate': 0.20})
+check('POST /api/sales/{id}/invoice -> 201', code == 201, f'HTTP {code}')
+check('total_amount KDV dahil', abs(inv['total_amount'] - round(expected * 1.2, 2)) < 0.01,
+      f"{inv['total_amount']} (beklenen {round(expected * 1.2, 2)})")
+check('invoice_number uretildi', str(inv['invoice_number']).startswith(f'INV-{sid}-'),
+      inv['invoice_number'])
+check('baslangic status draft', inv['status'] == 'draft', inv['status'])
+iid = inv['id']
+
+print('\n6. Invoice GET')
+code, got_inv = call('GET', f'/api/invoices/{iid}')
+check('GET /api/invoices/{id} -> 200', code == 200, f'HTTP {code}')
+check('sale_id eslesiyor', got_inv['sale_id'] == sid)
+check('customer_id eslesiyor', got_inv['customer_id'] == cid)
+
+print('\n7. Invoice status -> paid')
+code, paid = call('PUT', f'/api/invoices/{iid}', {'status': 'paid'})
+check('PUT /api/invoices/{id} -> 200', code == 200, f'HTTP {code}')
+check('status = paid', paid['status'] == 'paid', paid['status'])
+code, recheck = call('GET', f'/api/invoices/{iid}')
+check('kalici (GET ile dogrulandi)', recheck['status'] == 'paid', recheck['status'])
+
+print('\nBONUS: hatali istekler')
+code, _ = call('POST', f'/api/sales/{sid}/invoice', {})
+check('ayni sale icin 2. fatura -> 409', code == 409, f'HTTP {code}')
+code, _ = call('GET', '/api/sales/999999')
+check('olmayan sale -> 404', code == 404, f'HTTP {code}')
+code, _ = call('POST', '/api/sales', {'customer_id': 999999, 'items': [
+    {'product_id': pids[0], 'quantity': 1, 'unit_price': 1}]})
+check('olmayan customer ile sale -> 404', code == 404, f'HTTP {code}')
+
+print('\n' + '=' * 55)
+if failures:
+    print(f'SONUC: {len(failures)} KONTROL BASARISIZ')
+    for f in failures:
+        print('  -', f)
+    raise SystemExit(1)
+print('SONUC: TUM KONTROLLER BASARILI - uctan uca akis calisiyor')
