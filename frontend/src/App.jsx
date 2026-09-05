@@ -3,6 +3,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import Navbar from './components/Navbar';
 import ProtectedRoute from './components/ProtectedRoute';
 import Sidebar from './components/Sidebar';
+import { AlertsProvider } from './context/AlertsContext';
 import { AuthProvider } from './context/AuthContext';
 import Customers from './pages/Customers';
 import Dashboard from './pages/Dashboard';
@@ -41,6 +42,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <AlertsProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/" element={<Protected><Dashboard /></Protected>} />
@@ -61,6 +63,7 @@ export default function App() {
             }
           />
         </Routes>
+        </AlertsProvider>
       </AuthProvider>
     </BrowserRouter>
   );

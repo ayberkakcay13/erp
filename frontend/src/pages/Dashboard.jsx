@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import AlertsPanel from '../components/AlertsPanel';
+import DashboardCharts from '../components/DashboardCharts';
 import {
   Badge,
   ErrorMessage,
@@ -69,6 +71,9 @@ export default function Dashboard() {
     <div data-testid="page-Dashboard">
       <PageHeader title="Dashboard" />
 
+      {/* Phase 9: dusuk stok ve gecikmis fatura uyarilari */}
+      <AlertsPanel />
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Musteri" value={data.customers} to="/customers" testid="stat-customers" />
         <StatCard
@@ -94,6 +99,9 @@ export default function Dashboard() {
           {formatMoney(data.revenue)}
         </div>
       </div>
+
+      {/* Phase 6: ciro ozeti + aylik trend + en cok satan urunler */}
+      <DashboardCharts />
 
       <h3 className="text-sm font-medium text-gray-700 mb-2">Son Satislar</h3>
       {data.recentSales.length === 0 ? (

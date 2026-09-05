@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import CustomerForm from '../components/CustomerForm';
+import FilterBar, { FilterField, SearchInput, SortableTh } from '../components/FilterBar';
 import {
   Button,
   EmptyState,
@@ -10,6 +11,7 @@ import {
 } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { customerAPI } from '../services/api';
+import { matches, sortRows, toggleSort } from '../utils/filters';
 
 export default function Customers() {
   const [customers, setCustomers] = useState([]);
@@ -19,6 +21,10 @@ export default function Customers() {
   const [editing, setEditing] = useState(null);
   const [notice, setNotice] = useState('');
   const { isAdmin } = useAuth();
+
+  // Phase 8: arama ve siralama (frontend'de, her tusta backend'e istek atmadan)
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState({ key: null, dir: 'asc' });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -35,6 +41,13 @@ export default function Customers() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const visible = useMemo(() => {
+    const filtered = customers.filter((c) => matches(c, ['name', 'email', 'phone'], search));
+    return sortRows(filtered, sort, ['id']);
+  }, [customers, search, sort]);
+
+  const hasFilters = search.trim() !== '' || Boolean(sort.key);
 
   const openCreate = () => {
     setEditing(null);
@@ -91,24 +104,62 @@ export default function Customers() {
         />
       )}
 
+      {!loading && (
+        <FilterBar
+          resultCount={visible.length}
+          totalCount={customers.length}
+          hasFilters={hasFilters}
+          onClear={() => {
+            setSearch('');
+            setSort({ key: null, dir: 'asc' });
+          }}
+        >
+          <FilterField label="Ara">
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder="Ad, e-posta veya telefon"
+              testid="customer-search"
+            />
+          </FilterField>
+        </FilterBar>
+      )}
+
       {loading ? (
         <Loading />
       ) : customers.length === 0 ? (
         <EmptyState message="Henuz musteri yok. Yukaridaki butonla ekleyebilirsin." />
+      ) : visible.length === 0 ? (
+        <EmptyState message={`"${search}" icin sonuc bulunamadi.`} />
       ) : (
         <div className="bg-white border border-gray-200 rounded overflow-x-auto">
           <table className="w-full text-sm" data-testid="customers-table">
             <thead className="bg-gray-50 text-gray-600">
               <tr>
-                <th className="text-left px-4 py-2 font-medium">Ad Soyad</th>
-                <th className="text-left px-4 py-2 font-medium">E-posta</th>
+                <SortableTh
+                  label="Ad Soyad"
+                  sortKey="name"
+                  sort={sort}
+                  onSort={(k) => setSort(toggleSort(sort, k))}
+                />
+                <SortableTh
+                  label="E-posta"
+                  sortKey="email"
+                  sort={sort}
+                  onSort={(k) => setSort(toggleSort(sort, k))}
+                />
                 <th className="text-left px-4 py-2 font-medium">Telefon</th>
-                <th className="text-left px-4 py-2 font-medium">Kayit Tarihi</th>
+                <SortableTh
+                  label="Kayit Tarihi"
+                  sortKey="created_at"
+                  sort={sort}
+                  onSort={(k) => setSort(toggleSort(sort, k))}
+                />
                 <th className="text-right px-4 py-2 font-medium">Islemler</th>
               </tr>
             </thead>
             <tbody>
-              {customers.map((c) => (
+              {visible.map((c) => (
                 <tr key={c.id} data-testid={`customer-row-${c.id}`} className="border-t border-gray-100">
                   <td className="px-4 py-2 text-gray-800">{c.name}</td>
                   <td className="px-4 py-2 text-gray-600">{c.email}</td>

@@ -1,13 +1,14 @@
 """Invoice endpointleri. Fatura her zaman bir satistan uretilir."""
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Invoice, Sale
+from ..pdf import build_invoice_pdf
+from ..models import Invoice, Sale, SalesItem
 from ..schemas import InvoiceCreate, InvoiceResponse, InvoiceStatusUpdate
 
 router = APIRouter(
@@ -89,3 +90,54 @@ def update_invoice_status(
         raise HTTPException(status_code=500, detail=f'Durum guncellenemedi: {exc}')
     db.refresh(invoice)
     return invoice
+
+
+@router.get('/api/invoices/{invoice_id}/pdf')
+def download_invoice_pdf(invoice_id: int, db: Session = Depends(get_db)):
+    """Faturayi PDF olarak dondurur.
+
+    Fatura kaydinda urun kalemleri yok (sadece sale_id var), o yuzden
+    kalemler ilgili satistan cekiliyor.
+    """
+    invoice = db.get(Invoice, invoice_id)
+    if invoice is None:
+        raise HTTPException(status_code=404, detail=f'Invoice {invoice_id} bulunamadi')
+
+    sale = (
+        db.query(Sale)
+        .options(joinedload(Sale.items).joinedload(SalesItem.product),
+                 joinedload(Sale.customer))
+        .filter(Sale.id == invoice.sale_id)
+        .first()
+    )
+    if sale is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f'Faturaya bagli satis (#{invoice.sale_id}) bulunamadi',
+        )
+
+    items = [
+        {
+            'name': item.product.name if item.product else f'Urun #{item.product_id}',
+            'sku': item.product.sku if item.product else None,
+            'quantity': item.quantity,
+            'unit_price': item.unit_price,
+            'total_price': item.total_price,
+        }
+        for item in sale.items
+    ]
+
+    try:
+        content = build_invoice_pdf(invoice, sale, sale.customer, items)
+    except Exception as exc:  # PDF uretimi basarisizsa anlamli hata don
+        raise HTTPException(status_code=500, detail=f'PDF olusturulamadi: {exc}')
+
+    filename = f'{invoice.invoice_number or f"fatura-{invoice.id}"}.pdf'
+    return Response(
+        content=content,
+        media_type='application/pdf',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Length': str(len(content)),
+        },
+    )

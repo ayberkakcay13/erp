@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import FilterBar, { FilterField, SearchInput, SelectFilter, SortableTh } from '../components/FilterBar';
 import ProductForm from '../components/ProductForm';
+import ProductHistoryModal from '../components/ProductHistoryModal';
 import {
   Badge,
   Button,
@@ -11,6 +14,7 @@ import {
 } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { productAPI } from '../services/api';
+import { matches, sortRows, toggleSort } from '../utils/filters';
 
 const LOW_STOCK = 10;
 
@@ -18,6 +22,19 @@ function stockBadge(stock) {
   if (stock === 0) return <Badge tone="red">Tukendi</Badge>;
   if (stock < LOW_STOCK) return <Badge tone="yellow">Az stok</Badge>;
   return <Badge tone="green">Yeterli</Badge>;
+}
+
+const STOCK_OPTIONS = [
+  { value: 'all', label: 'Tum stok durumlari' },
+  { value: 'ok', label: 'Yeterli (10+)' },
+  { value: 'low', label: 'Az stok (1-9)' },
+  { value: 'out', label: 'Tukendi (0)' },
+];
+
+function stockGroup(stock) {
+  if (stock === 0) return 'out';
+  if (stock < LOW_STOCK) return 'low';
+  return 'ok';
 }
 
 export default function Products() {
@@ -28,6 +45,14 @@ export default function Products() {
   const [editing, setEditing] = useState(null);
   const [notice, setNotice] = useState('');
   const { isAdmin } = useAuth();
+  const [historyId, setHistoryId] = useState(null);
+
+  // Phase 8: arama, stok filtresi, siralama
+  // Phase 9 entegrasyonu: uyari panelinden /products?stock=low ile gelinebiliyor
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [search, setSearch] = useState('');
+  const [stockFilter, setStockFilter] = useState(searchParams.get('stock') ?? 'all');
+  const [sort, setSort] = useState({ key: null, dir: 'asc' });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -44,6 +69,31 @@ export default function Products() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // URL'den gelen filtre degisirse (uyari panelinden gelis) state'i guncelle
+  useEffect(() => {
+    const fromUrl = searchParams.get('stock');
+    if (fromUrl && fromUrl !== stockFilter) setStockFilter(fromUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  const visible = useMemo(() => {
+    const filtered = products.filter(
+      (p) =>
+        matches(p, ['name', 'sku'], search) &&
+        (stockFilter === 'all' || stockGroup(p.stock) === stockFilter)
+    );
+    return sortRows(filtered, sort, ['price', 'stock', 'id']);
+  }, [products, search, stockFilter, sort]);
+
+  const hasFilters = search.trim() !== '' || stockFilter !== 'all' || Boolean(sort.key);
+
+  const clearFilters = () => {
+    setSearch('');
+    setStockFilter('all');
+    setSort({ key: null, dir: 'asc' });
+    if (searchParams.get('stock')) setSearchParams({}, { replace: true });
+  };
 
   const handleSaved = (saved) => {
     setFormOpen(false);
@@ -63,6 +113,8 @@ export default function Products() {
       setError(err.message);
     }
   };
+
+  const onSort = (k) => setSort(toggleSort(sort, k));
 
   return (
     <div data-testid="page-Products">
@@ -96,25 +148,53 @@ export default function Products() {
         />
       )}
 
+      {!loading && (
+        <FilterBar
+          resultCount={visible.length}
+          totalCount={products.length}
+          hasFilters={hasFilters}
+          onClear={clearFilters}
+        >
+          <FilterField label="Ara">
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder="Urun adi veya SKU"
+              testid="product-search"
+            />
+          </FilterField>
+          <FilterField label="Stok durumu">
+            <SelectFilter
+              value={stockFilter}
+              onChange={setStockFilter}
+              options={STOCK_OPTIONS}
+              testid="stock-filter"
+            />
+          </FilterField>
+        </FilterBar>
+      )}
+
       {loading ? (
         <Loading />
       ) : products.length === 0 ? (
         <EmptyState message="Henuz urun yok." />
+      ) : visible.length === 0 ? (
+        <EmptyState message="Arama/filtre kriterlerine uyan urun bulunamadi." />
       ) : (
         <div className="bg-white border border-gray-200 rounded overflow-x-auto">
           <table className="w-full text-sm" data-testid="products-table">
             <thead className="bg-gray-50 text-gray-600">
               <tr>
-                <th className="text-left px-4 py-2 font-medium">Urun</th>
-                <th className="text-left px-4 py-2 font-medium">SKU</th>
-                <th className="text-right px-4 py-2 font-medium">Fiyat</th>
-                <th className="text-right px-4 py-2 font-medium">Stok</th>
+                <SortableTh label="Urun" sortKey="name" sort={sort} onSort={onSort} />
+                <SortableTh label="SKU" sortKey="sku" sort={sort} onSort={onSort} />
+                <SortableTh label="Fiyat" sortKey="price" sort={sort} onSort={onSort} align="right" />
+                <SortableTh label="Stok" sortKey="stock" sort={sort} onSort={onSort} align="right" />
                 <th className="text-left px-4 py-2 font-medium">Durum</th>
                 <th className="text-right px-4 py-2 font-medium">Islemler</th>
               </tr>
             </thead>
             <tbody>
-              {products.map((p) => (
+              {visible.map((p) => (
                 <tr
                   key={p.id}
                   data-testid={`product-row-${p.id}`}
@@ -133,6 +213,14 @@ export default function Products() {
                   </td>
                   <td className="px-4 py-2">{stockBadge(p.stock)}</td>
                   <td className="px-4 py-2 text-right whitespace-nowrap">
+                    <Button
+                      variant="secondary"
+                      className="mr-2"
+                      onClick={() => setHistoryId(p.id)}
+                      data-testid={`history-${p.id}`}
+                    >
+                      Gecmis
+                    </Button>
                     <Button
                       variant="secondary"
                       className="mr-2"
@@ -156,6 +244,10 @@ export default function Products() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {historyId && (
+        <ProductHistoryModal productId={historyId} onClose={() => setHistoryId(null)} />
       )}
     </div>
   );

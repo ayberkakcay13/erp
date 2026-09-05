@@ -10,7 +10,7 @@ import {
   formatMoney,
   inputClass,
 } from '../components/ui';
-import { invoiceAPI, salesAPI } from '../services/api';
+import { downloadInvoicePdf, invoiceAPI, salesAPI } from '../services/api';
 import { statusLabel, statusTone } from './Sales';
 
 export default function SaleDetail() {
@@ -137,7 +137,26 @@ export default function SaleDetail() {
           <div className="mt-3">
             {invoice ? (
               <div data-testid="invoice-info" className="text-sm">
-                <div className="text-gray-700 font-mono text-xs">{invoice.invoice_number}</div>
+                <div className="text-gray-700 font-mono text-xs mb-2">{invoice.invoice_number}</div>
+                <Button
+                  onClick={async () => {
+                    setBusy(true);
+                    setError('');
+                    try {
+                      await downloadInvoicePdf(invoice.id, invoice.invoice_number);
+                      setNotice(`${invoice.invoice_number} PDF olarak indirildi.`);
+                    } catch (err) {
+                      setError(err.message);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                  disabled={busy}
+                  data-testid="download-pdf"
+                  className="mr-2"
+                >
+                  PDF Indir
+                </Button>
                 <Link to="/invoices" className="text-indigo-600 hover:underline text-sm">
                   Faturalara git
                 </Link>

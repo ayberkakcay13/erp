@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import FilterBar, { FilterField, SearchInput, SelectFilter } from '../components/FilterBar';
 import {
   Badge,
   Button,
@@ -11,12 +12,20 @@ import {
   formatMoney,
   inputClass,
 } from '../components/ui';
-import { customerAPI, invoiceAPI } from '../services/api';
+import { customerAPI, downloadInvoicePdf, invoiceAPI } from '../services/api';
+import { matches, sortRows, toggleSort } from '../utils/filters';
+
+const STATUS_OPTIONS = [
+  { value: 'all', label: 'Tum durumlar' },
+  { value: 'draft', label: 'Taslak' },
+  { value: 'issued', label: 'Kesildi' },
+  { value: 'paid', label: 'Odendi' },
+];
 
 const tone = { draft: 'gray', issued: 'blue', paid: 'green' };
 const label = { draft: 'Taslak', issued: 'Kesildi', paid: 'Odendi' };
 
-function InvoiceModal({ invoice, customerName, onClose, onStatusChange, busy }) {
+function InvoiceModal({ invoice, customerName, onClose, onStatusChange, busy, onDownload, downloading }) {
   return (
     <div
       className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-10"
@@ -77,7 +86,10 @@ function InvoiceModal({ invoice, customerName, onClose, onStatusChange, busy }) 
           <option value="paid">Odendi</option>
         </select>
 
-        <div className="mt-4 text-right">
+        <div className="mt-4 flex justify-between gap-2">
+          <Button onClick={() => onDownload(invoice)} disabled={downloading} data-testid="modal-pdf">
+            {downloading ? 'Hazirlaniyor...' : 'PDF Indir'}
+          </Button>
           <Button variant="secondary" onClick={onClose} data-testid="modal-close">
             Kapat
           </Button>
@@ -96,6 +108,13 @@ export default function Invoices() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
 
+  // Phase 8: fatura no / musteri aramasi + durum filtresi
+  // Phase 9 entegrasyonu: uyari panelinden /invoices?status=issued ile gelinebiliyor
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState(searchParams.get('status') ?? 'all');
+  const [sort, setSort] = useState({ key: null, dir: 'asc' });
+
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -113,6 +132,48 @@ export default function Invoices() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // URL'den gelen durum filtresi (uyari panelinden gelis)
+  useEffect(() => {
+    const fromUrl = searchParams.get('status');
+    if (fromUrl && fromUrl !== status) setStatus(fromUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  const visible = useMemo(() => {
+    const rows = invoices
+      .map((i) => ({ ...i, customer_name: customers[i.customer_id] ?? '' }))
+      .filter(
+        (i) =>
+          matches(i, ['invoice_number', 'customer_name'], search) &&
+          (status === 'all' || i.status === status)
+      );
+    return sortRows(rows, sort, ['id', 'total_amount']);
+  }, [invoices, customers, search, status, sort]);
+
+  const hasFilters = search.trim() !== '' || status !== 'all' || Boolean(sort.key);
+
+  const clearFilters = () => {
+    setSearch('');
+    setStatus('all');
+    setSort({ key: null, dir: 'asc' });
+    if (searchParams.get('status')) setSearchParams({}, { replace: true });
+  };
+
+  const [downloadingId, setDownloadingId] = useState(null);
+
+  const downloadPdf = async (invoice) => {
+    setDownloadingId(invoice.id);
+    setError('');
+    try {
+      await downloadInvoicePdf(invoice.id, invoice.invoice_number);
+      setNotice(`${invoice.invoice_number} PDF olarak indirildi.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const changeStatus = async (invoice, status) => {
     setBusy(true);
@@ -140,26 +201,72 @@ export default function Invoices() {
         </div>
       )}
 
+      {!loading && invoices.length > 0 && (
+        <FilterBar
+          resultCount={visible.length}
+          totalCount={invoices.length}
+          hasFilters={hasFilters}
+          onClear={clearFilters}
+        >
+          <FilterField label="Ara">
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder="Fatura no veya musteri"
+              testid="invoice-search"
+            />
+          </FilterField>
+          <FilterField label="Durum">
+            <SelectFilter
+              value={status}
+              onChange={setStatus}
+              options={STATUS_OPTIONS}
+              testid="invoice-status-filter"
+            />
+          </FilterField>
+        </FilterBar>
+      )}
+
       {loading ? (
         <Loading />
       ) : invoices.length === 0 ? (
         <EmptyState message="Henuz fatura yok. Bir satis detayindan fatura olusturabilirsin." />
+      ) : visible.length === 0 ? (
+        <EmptyState message="Arama/filtre kriterlerine uyan fatura bulunamadi." />
       ) : (
         <div className="bg-white border border-gray-200 rounded overflow-x-auto">
           <table className="w-full text-sm" data-testid="invoices-table">
             <thead className="bg-gray-50 text-gray-600">
               <tr>
-                <th className="text-left px-4 py-2 font-medium">Fatura No</th>
+                <th
+                  className="text-left px-4 py-2 font-medium cursor-pointer select-none hover:text-indigo-700"
+                  onClick={() => setSort(toggleSort(sort, 'invoice_number'))}
+                  data-testid="sort-invoice-number"
+                >
+                  Fatura No
+                  <span className="text-indigo-600">
+                    {sort.key === 'invoice_number' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+                  </span>
+                </th>
                 <th className="text-left px-4 py-2 font-medium">Musteri</th>
                 <th className="text-left px-4 py-2 font-medium">Satis</th>
                 <th className="text-left px-4 py-2 font-medium">Tarih</th>
-                <th className="text-right px-4 py-2 font-medium">Tutar</th>
+                <th
+                  className="text-right px-4 py-2 font-medium cursor-pointer select-none hover:text-indigo-700"
+                  onClick={() => setSort(toggleSort(sort, 'total_amount'))}
+                  data-testid="sort-invoice-total"
+                >
+                  Tutar
+                  <span className="text-indigo-600">
+                    {sort.key === 'total_amount' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+                  </span>
+                </th>
                 <th className="text-left px-4 py-2 font-medium">Durum</th>
                 <th className="text-right px-4 py-2 font-medium">Islem</th>
               </tr>
             </thead>
             <tbody>
-              {invoices.map((inv) => (
+              {visible.map((inv) => (
                 <tr key={inv.id} data-testid={`invoice-row-${inv.id}`} className="border-t border-gray-100">
                   <td className="px-4 py-2 font-mono text-xs text-gray-700">{inv.invoice_number}</td>
                   <td className="px-4 py-2 text-gray-800">{customers[inv.customer_id] ?? '-'}</td>
@@ -180,10 +287,18 @@ export default function Invoices() {
                   <td className="px-4 py-2 text-right">
                     <Button
                       variant="secondary"
+                      className="mr-2"
                       onClick={() => setSelected(inv)}
                       data-testid={`open-${inv.id}`}
                     >
                       Detay
+                    </Button>
+                    <Button
+                      onClick={() => downloadPdf(inv)}
+                      disabled={downloadingId === inv.id}
+                      data-testid={`pdf-${inv.id}`}
+                    >
+                      {downloadingId === inv.id ? '...' : 'PDF'}
                     </Button>
                   </td>
                 </tr>
@@ -199,6 +314,8 @@ export default function Invoices() {
           customerName={customers[selected.customer_id] ?? '-'}
           busy={busy}
           onStatusChange={changeStatus}
+          onDownload={downloadPdf}
+          downloading={downloadingId === selected.id}
           onClose={() => setSelected(null)}
         />
       )}

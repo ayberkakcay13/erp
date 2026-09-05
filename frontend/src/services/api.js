@@ -106,6 +106,43 @@ export const authAPI = {
   me: () => unwrap(api.get('/api/auth/me')),
 };
 
+/**
+ * Fatura PDF'ini indirir.
+ * Endpoint token istedigi icin duz bir <a href> ile indirilemiyor;
+ * dosya blob olarak cekilip gecici bir link uzerinden kaydettiriliyor.
+ */
+export async function downloadInvoicePdf(invoiceId, invoiceNumber) {
+  const response = await api.get(`/api/invoices/${invoiceId}/pdf`, {
+    responseType: 'blob',
+  });
+  const blob = new Blob([response.data], { type: 'application/pdf' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${invoiceNumber || `fatura-${invoiceId}`}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+export const reportAPI = {
+  salesByMonth: (months = 6) =>
+    unwrap(api.get('/api/reports/sales-by-month', { params: { months } })),
+  topProducts: (limit = 5) =>
+    unwrap(api.get('/api/reports/top-products', { params: { limit } })),
+  revenueSummary: () => unwrap(api.get('/api/reports/revenue-summary')),
+  productHistory: (id) => unwrap(api.get(`/api/reports/product/${id}/history`)),
+};
+
+export const alertAPI = {
+  lowStock: (threshold) =>
+    unwrap(api.get('/api/alerts/low-stock', { params: threshold ? { threshold } : {} })),
+  overdueInvoices: (days) =>
+    unwrap(api.get('/api/alerts/overdue-invoices', { params: days ? { days } : {} })),
+  summary: () => unwrap(api.get('/api/alerts/summary')),
+};
+
 export const userAPI = {
   getAll: () => unwrap(api.get('/api/users')),
   create: (data) => unwrap(api.post('/api/auth/register', data)),
