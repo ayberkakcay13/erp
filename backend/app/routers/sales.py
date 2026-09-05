@@ -63,6 +63,7 @@ def create_sale(payload: SaleCreate, db: Session = Depends(get_db)):
 
     # Once tum urunleri dogrula, sonra kayit ac - yarim satis olusmasin
     products = {}
+    requested = {}
     for item in payload.items:
         if item.product_id not in products:
             product = db.get(Product, item.product_id)
@@ -71,6 +72,21 @@ def create_sale(payload: SaleCreate, db: Session = Depends(get_db)):
                     status_code=404, detail=f'Product {item.product_id} bulunamadi'
                 )
             products[item.product_id] = product
+        # Ayni urun birden fazla satirda olabilir, toplam miktar uzerinden kontrol et
+        requested[item.product_id] = requested.get(item.product_id, 0) + item.quantity
+
+    # Stok kontrolu: yetersizse hicbir kayit olusmadan 400 don
+    for product_id, quantity in requested.items():
+        product = products[product_id]
+        available = product.stock or 0
+        if available < quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f'"{product.name}" icin stok yetersiz: '
+                    f'{quantity} adet istendi, stokta {available} adet var'
+                ),
+            )
 
     sale = Sale(
         customer_id=payload.customer_id,
@@ -92,6 +108,10 @@ def create_sale(payload: SaleCreate, db: Session = Depends(get_db)):
             )
         )
     sale.total_amount = round(total, 2)
+
+    # Stok dusur - satis kaydiyla ayni transaction'da, commit birlikte
+    for product_id, quantity in requested.items():
+        products[product_id].stock -= quantity
 
     db.add(sale)
     try:

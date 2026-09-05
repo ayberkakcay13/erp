@@ -63,6 +63,23 @@ check(f'total_amount == {expected}', abs(sale['total_amount'] - expected) < 0.01
 sid = sale['id']
 print(f'   sale_id = {sid}')
 
+print('\n3b. Stok otomatik dustu mu?')
+code, p0 = call('GET', f'/api/products/{pids[0]}')
+check('Mouse stok 100 -> 96', p0['stock'] == 96, f"gelen: {p0['stock']}")
+code, p1 = call('GET', f'/api/products/{pids[1]}')
+check('Kulaklik stok 40 -> 38', p1['stock'] == 38, f"gelen: {p1['stock']}")
+code, p2 = call('GET', f'/api/products/{pids[2]}')
+check('Webcam stok degismedi (25)', p2['stock'] == 25, f"gelen: {p2['stock']}")
+
+print('\n3c. Yetersiz stokta satis reddediliyor mu?')
+code, err = call('POST', '/api/sales', {'customer_id': cid, 'items': [
+    {'product_id': pids[2], 'quantity': 9999, 'unit_price': 890.0}]})
+check('stoktan fazla miktar -> 400', code == 400, f'HTTP {code}')
+check('hata mesaji stok yetersiz diyor',
+      'stok yetersiz' in str(err.get('detail', '')), str(err.get('detail'))[:60])
+code, p2b = call('GET', f'/api/products/{pids[2]}')
+check('reddedilen satista stok degismedi', p2b['stock'] == 25, f"gelen: {p2b['stock']}")
+
 print('\n4. Sale bilgisini GET ile cek (detayli response)')
 code, got = call('GET', f'/api/sales/{sid}')
 check('GET /api/sales/{id} -> 200', code == 200, f'HTTP {code}')
