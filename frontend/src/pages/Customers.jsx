@@ -8,6 +8,7 @@ import {
   PageHeader,
   formatDate,
 } from '../components/ui';
+import { useAuth } from '../context/AuthContext';
 import { customerAPI } from '../services/api';
 
 export default function Customers() {
@@ -17,6 +18,7 @@ export default function Customers() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [notice, setNotice] = useState('');
+  const { isAdmin } = useAuth();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -121,9 +123,12 @@ export default function Customers() {
                     >
                       Duzenle
                     </Button>
-                    <Button variant="danger" onClick={() => remove(c)} data-testid={`delete-${c.id}`}>
-                      Sil
-                    </Button>
+                    {/* Silme sadece admin rolunde gorunur (backend de 403 ile korur) */}
+                    {isAdmin && (
+                      <Button variant="danger" onClick={() => remove(c)} data-testid={`delete-${c.id}`}>
+                        Sil
+                      </Button>
+                    )}
                   </td>
                 </tr>
               ))}

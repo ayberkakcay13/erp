@@ -3,11 +3,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from ..auth import get_current_user, require_admin
 from ..database import get_db
-from ..models import Product
+from ..models import Product, User
 from ..schemas import ProductCreate, ProductResponse, ProductUpdate
 
-router = APIRouter(prefix='/api/products', tags=['products'])
+router = APIRouter(
+    prefix='/api/products',
+    tags=['products'],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 def _get_or_404(db: Session, product_id: int) -> Product:
@@ -65,7 +70,11 @@ def update_product(product_id: int, payload: ProductUpdate, db: Session = Depend
 
 
 @router.delete('/{product_id}', status_code=status.HTTP_204_NO_CONTENT)
-def delete_product(product_id: int, db: Session = Depends(get_db)):
+def delete_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),  # silme sadece admin
+):
     product = _get_or_404(db, product_id)
     try:
         db.delete(product)

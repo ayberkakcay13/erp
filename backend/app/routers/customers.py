@@ -3,11 +3,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from ..auth import get_current_user, require_admin
 from ..database import get_db
-from ..models import Customer
+from ..models import Customer, User
 from ..schemas import CustomerCreate, CustomerResponse, CustomerUpdate
 
-router = APIRouter(prefix='/api/customers', tags=['customers'])
+router = APIRouter(
+    prefix='/api/customers',
+    tags=['customers'],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 def _get_or_404(db: Session, customer_id: int) -> Customer:
@@ -65,7 +70,11 @@ def update_customer(customer_id: int, payload: CustomerUpdate, db: Session = Dep
 
 
 @router.delete('/{customer_id}', status_code=status.HTTP_204_NO_CONTENT)
-def delete_customer(customer_id: int, db: Session = Depends(get_db)):
+def delete_customer(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),  # silme sadece admin
+):
     customer = _get_or_404(db, customer_id)
     try:
         db.delete(customer)

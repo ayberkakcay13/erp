@@ -8,7 +8,7 @@ from sqlalchemy import inspect, text
 from app.database import Base, engine
 from app import models  # noqa: F401  -- modellerin Base'e kaydolmasi icin gerekli
 
-EXPECTED = ['customers', 'products', 'sales', 'sales_items', 'invoices']
+EXPECTED = ['customers', 'products', 'sales', 'sales_items', 'invoices', 'users']
 
 print('Tablolar olusturuluyor...')
 Base.metadata.create_all(bind=engine)

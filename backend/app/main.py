@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from .database import test_connection
-from .routers import customers, invoices, products, sales
+from .routers import auth, customers, invoices, products, sales, users
 
 app = FastAPI(
     title='ERP System',
@@ -20,6 +20,8 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
+app.include_router(auth.router)
+app.include_router(users.router)
 app.include_router(customers.router)
 app.include_router(products.router)
 app.include_router(sales.router)

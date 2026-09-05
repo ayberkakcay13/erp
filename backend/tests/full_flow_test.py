@@ -7,13 +7,18 @@ import urllib.request
 BASE = 'http://127.0.0.1:8000'
 failures = []
 
+# Phase 5'ten sonra tum is endpointleri giris istiyor; asagida bir test
+# kullanicisiyla giris yapilip token buraya konuyor.
+TOKEN = None
 
-def call(method, path, body=None):
+
+def call(method, path, body=None, token='default'):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(
-        BASE + path, data=data, method=method,
-        headers={'Content-Type': 'application/json'},
-    )
+    headers = {'Content-Type': 'application/json'}
+    active = TOKEN if token == 'default' else token
+    if active:
+        headers['Authorization'] = f'Bearer {active}'
+    req = urllib.request.Request(BASE + path, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req) as r:
             raw = r.read().decode()
@@ -30,6 +35,30 @@ def check(label, cond, detail=''):
 
 
 suffix = str(int(time.time()))
+
+print('0. Giris (Phase 5: tum is endpointleri token istiyor)')
+code, _ = call('GET', '/api/customers', token=None)
+check('token\'siz erisim -> 401', code == 401, f'HTTP {code}')
+
+# Sistemde kullanici yoksa ilk kayit otomatik admin olur; varsa bu hesapla giris yapilir.
+TEST_ADMIN = 'fullflow-test@erptest.com'
+TEST_PASS = 'fullflow123'
+code, _ = call('POST', '/api/auth/register', {
+    'email': TEST_ADMIN, 'password': TEST_PASS, 'full_name': 'Full Flow Test'}, token=None)
+if code not in (201, 401, 409):
+    print(f'  (register yaniti: HTTP {code})')
+
+code, tok = call('POST', '/api/auth/login',
+                 {'email': TEST_ADMIN, 'password': TEST_PASS}, token=None)
+if code != 200:
+    raise SystemExit(
+        f'\nGiris yapilamadi (HTTP {code}). Bu test icin bir kez su kullaniciyi olustur:\n'
+        f'  e-posta: {TEST_ADMIN}  sifre: {TEST_PASS}\n'
+        f'  (admin olarak giris yapip Kullanicilar sayfasindan ekleyebilirsin)'
+    )
+TOKEN = tok['access_token']
+check('giris basarili', bool(TOKEN))
+check('token ile erisim aciliyor', call('GET', '/api/customers')[0] == 200)
 
 print('\n1. Customer olustur')
 code, cust = call('POST', '/api/customers', {

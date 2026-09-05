@@ -5,6 +5,25 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+// Token ve 401 davranisi AuthContext tarafindan buraya baglanir
+let authToken = null;
+let onUnauthorized = null;
+
+export function setAuthToken(token) {
+  authToken = token;
+}
+
+export function setUnauthorizedHandler(handler) {
+  onUnauthorized = handler;
+}
+
+api.interceptors.request.use((config) => {
+  if (authToken) {
+    config.headers.Authorization = `Bearer ${authToken}`;
+  }
+  return config;
+});
+
 /**
  * Backend HTTPException'lari {"detail": "..."} seklinde doner.
  * Pydantic validation hatalari (422) ise detail'i bir dizi olarak doner.
@@ -34,8 +53,15 @@ function toMessage(error) {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    const status = error.response?.status;
+    // Token yok/gecersiz/suresi dolmus: oturumu kapat, login sayfasina dusulsun.
+    // Login denemesinin kendi 401'i haric - orada "sifre hatali" mesaji gosterilmeli.
+    const isLoginRequest = error.config?.url?.includes('/api/auth/login');
+    if (status === 401 && !isLoginRequest && onUnauthorized) {
+      onUnauthorized();
+    }
     const wrapped = new Error(toMessage(error));
-    wrapped.status = error.response?.status;
+    wrapped.status = status;
     wrapped.original = error;
     return Promise.reject(wrapped);
   }
@@ -72,6 +98,19 @@ export const invoiceAPI = {
   // Fatura her zaman bir satistan uretilir: POST /api/sales/{sale_id}/invoice
   create: (saleId, data = {}) => unwrap(api.post(`/api/sales/${saleId}/invoice`, data)),
   updateStatus: (id, status) => unwrap(api.put(`/api/invoices/${id}`, { status })),
+};
+
+export const authAPI = {
+  login: (email, password) => unwrap(api.post('/api/auth/login', { email, password })),
+  register: (data) => unwrap(api.post('/api/auth/register', data)),
+  me: () => unwrap(api.get('/api/auth/me')),
+};
+
+export const userAPI = {
+  getAll: () => unwrap(api.get('/api/users')),
+  create: (data) => unwrap(api.post('/api/auth/register', data)),
+  deactivate: (id) => unwrap(api.put(`/api/users/${id}/deactivate`)),
+  activate: (id) => unwrap(api.put(`/api/users/${id}/activate`)),
 };
 
 export default api;

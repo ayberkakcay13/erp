@@ -5,11 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from ..auth import get_current_user
 from ..database import get_db
 from ..models import Invoice, Sale
 from ..schemas import InvoiceCreate, InvoiceResponse, InvoiceStatusUpdate
 
-router = APIRouter(tags=['invoices'])
+router = APIRouter(
+    tags=['invoices'],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.post(

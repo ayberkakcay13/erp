@@ -9,6 +9,7 @@ import {
   PageHeader,
   formatMoney,
 } from '../components/ui';
+import { useAuth } from '../context/AuthContext';
 import { productAPI } from '../services/api';
 
 const LOW_STOCK = 10;
@@ -26,6 +27,7 @@ export default function Products() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [notice, setNotice] = useState('');
+  const { isAdmin } = useAuth();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -142,9 +144,12 @@ export default function Products() {
                     >
                       Duzenle
                     </Button>
-                    <Button variant="danger" onClick={() => remove(p)} data-testid={`delete-${p.id}`}>
-                      Sil
-                    </Button>
+                    {/* Silme sadece admin rolunde gorunur (backend de 403 ile korur) */}
+                    {isAdmin && (
+                      <Button variant="danger" onClick={() => remove(p)} data-testid={`delete-${p.id}`}>
+                        Sil
+                      </Button>
+                    )}
                   </td>
                 </tr>
               ))}

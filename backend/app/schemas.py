@@ -125,3 +125,36 @@ class InvoiceResponse(BaseModel):
     total_amount: float
     status: str
     created_at: Optional[datetime] = None
+
+
+# ---------------- User / Auth ----------------
+
+class UserBase(BaseModel):
+    email: EmailStr
+    full_name: Optional[str] = Field(default=None, max_length=255)
+
+
+class UserCreate(UserBase):
+    password: str = Field(min_length=6, max_length=128)
+    role: str = Field(default='sales', pattern='^(admin|sales)$')
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class UserResponse(UserBase):
+    """Sifre alanlari BILEREK yok - disari asla sizmamali."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    role: str
+    is_active: bool
+    created_at: Optional[datetime] = None
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = 'bearer'
+    user: UserResponse

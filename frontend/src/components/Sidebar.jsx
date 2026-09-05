@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 const links = [
   { to: '/', label: 'Dashboard', end: true },
@@ -6,13 +7,17 @@ const links = [
   { to: '/products', label: 'Urunler' },
   { to: '/sales', label: 'Satislar' },
   { to: '/invoices', label: 'Faturalar' },
+  { to: '/users', label: 'Kullanicilar', adminOnly: true },
 ];
 
 export default function Sidebar() {
+  const { isAdmin } = useAuth();
+  const visible = links.filter((link) => !link.adminOnly || isAdmin);
+
   return (
     <aside className="w-28 sm:w-44 md:w-56 bg-indigo-900 text-indigo-100 shrink-0 p-2 sm:p-4">
       <nav className="flex flex-col gap-1">
-        {links.map((link) => (
+        {visible.map((link) => (
           <NavLink
             key={link.to}
             to={link.to}

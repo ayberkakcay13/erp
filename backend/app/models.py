@@ -1,4 +1,4 @@
-﻿from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Date
+﻿from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime, ForeignKey, Date
 from sqlalchemy.orm import relationship
 from .database import Base
 from datetime import datetime
@@ -53,4 +53,14 @@ class Invoice(Base):
     issued_date = Column(Date)
     total_amount = Column(Float)
     status = Column(String(20), default='draft')
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(String(20), nullable=False, default='sales')  # admin | sales
+    full_name = Column(String(255))
+    is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
