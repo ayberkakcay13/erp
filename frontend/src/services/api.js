@@ -90,6 +90,10 @@ export const salesAPI = {
   getById: (id) => unwrap(api.get(`/api/sales/${id}`)),
   create: (data) => unwrap(api.post('/api/sales', data)),
   updateStatus: (id, status) => unwrap(api.put(`/api/sales/${id}`, { status })),
+  // Phase 11: belge yasam dongusu
+  submit: (id) => unwrap(api.post(`/api/sales/${id}/submit`)),
+  cancel: (id, reason) => unwrap(api.post(`/api/sales/${id}/cancel`, { reason })),
+  remove: (id) => unwrap(api.delete(`/api/sales/${id}`)),
 };
 
 export const invoiceAPI = {
@@ -98,6 +102,10 @@ export const invoiceAPI = {
   // Fatura her zaman bir satistan uretilir: POST /api/sales/{sale_id}/invoice
   create: (saleId, data = {}) => unwrap(api.post(`/api/sales/${saleId}/invoice`, data)),
   updateStatus: (id, status) => unwrap(api.put(`/api/invoices/${id}`, { status })),
+  // Phase 11: taslak fatura numara almaz; numara onayda atanir
+  submit: (id) => unwrap(api.post(`/api/invoices/${id}/submit`)),
+  cancel: (id, reason) => unwrap(api.post(`/api/invoices/${id}/cancel`, { reason })),
+  remove: (id) => unwrap(api.delete(`/api/invoices/${id}`)),
 };
 
 export const authAPI = {
@@ -166,6 +174,23 @@ export const transferAPI = {
   getAll: (params) => unwrap(api.get('/api/transfers', { params })),
   getById: (id) => unwrap(api.get(`/api/transfers/${id}`)),
   create: (data) => unwrap(api.post('/api/transfers', data)),
+  submit: (id) => unwrap(api.post(`/api/transfers/${id}/submit`)),
+  cancel: (id, reason) => unwrap(api.post(`/api/transfers/${id}/cancel`, { reason })),
+};
+
+// ---------------- Phase 11: denetim izi ve numaralandirma ----------------
+
+export const auditAPI = {
+  list: (params) => unwrap(api.get('/api/audit-log', { params })),
+  tables: () => unwrap(api.get('/api/audit-log/tables')),
+  recordHistory: (table, recordId) =>
+    unwrap(api.get(`/api/audit-log/${table}/${recordId}`)),
+};
+
+export const namingSeriesAPI = {
+  getAll: (params) => unwrap(api.get('/api/naming-series', { params })),
+  currentYear: () => unwrap(api.get('/api/naming-series/current-year')),
+  update: (id, data) => unwrap(api.put(`/api/naming-series/${id}`, data)),
 };
 
 export const userAPI = {

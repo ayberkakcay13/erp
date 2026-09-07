@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, ForeignKey, Index, Integer,
-    Numeric, String, Text,
+    Numeric, String, Text, text,
 )
 from sqlalchemy import event
 from sqlalchemy.orm import relationship
@@ -32,6 +32,13 @@ class Sale(Base):
     sale_date = Column(Date, nullable=False)
     total_amount = Column(Numeric(18, 4), nullable=False)
     status = Column(String(20), default='pending')
+    # Phase 11: belge yasam dongusu (status is durumu icin ayri kalir)
+    docstatus = Column(Integer, nullable=False, default=0)
+    submitted_at = Column(DateTime, nullable=True)
+    submitted_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     customer = relationship('Customer', back_populates='sales')
     items = relationship('SalesItem', back_populates='sale', cascade='all, delete-orphan')
@@ -58,6 +65,13 @@ class Invoice(Base):
     issued_date = Column(Date)
     total_amount = Column(Numeric(18, 4))
     status = Column(String(20), default='draft')
+    # Phase 11: belge yasam dongusu (status is durumu icin ayri kalir)
+    docstatus = Column(Integer, nullable=False, default=0)
+    submitted_at = Column(DateTime, nullable=True)
+    submitted_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class User(Base):
@@ -137,6 +151,13 @@ class StockTransfer(Base):
     to_warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=False)
     transfer_date = Column(Date, nullable=False)
     status = Column(String(20), nullable=False, default='draft')  # draft|completed|cancelled
+    # Phase 11: belge yasam dongusu (status is durumu icin ayri kalir)
+    docstatus = Column(Integer, nullable=False, default=0)
+    submitted_at = Column(DateTime, nullable=True)
+    submitted_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
     note = Column(Text, nullable=True)
     created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -179,3 +200,84 @@ def _block_ledger_delete(mapper, connection, target):  # noqa: ARG001
         'Stok defteri satirlari silinemez. Duzeltme icin ters kayit '
         "(reason='duzeltme') atin."
     )
+
+
+# ---------------- Phase 11: Belge durumu, numaralandirma, denetim izi ----------------
+
+class DocStatus:
+    """Belge yasam dongusu. `status` (is akisi) ile karistirilmamali."""
+    DRAFT = 0
+    SUBMITTED = 1
+    CANCELLED = 2
+
+    LABELS = {0: 'taslak', 1: 'onayli', 2: 'iptal'}
+
+
+# docstatus tasiyan modeller - degismezlik kurali bunlara uygulanir
+DOCUMENT_MODELS = ('Sale', 'Invoice', 'StockTransfer')
+
+# Onayli/iptal belgede degismesine izin verilen alanlar (submit/cancel akisi)
+DOC_LIFECYCLE_FIELDS = frozenset({
+    'docstatus', 'submitted_at', 'submitted_by',
+    'cancelled_at', 'cancelled_by', 'cancel_reason',
+    'invoice_number', 'transfer_no', 'status',
+})
+
+
+class NamingSeries(Base):
+    """Belge numarasi sayaci. Artis atomik tek SQL ifadesiyle yapilir."""
+    __tablename__ = 'naming_series'
+    id = Column(Integer, primary_key=True)
+    doc_type = Column(String(50), nullable=False)
+    prefix = Column(String(20), nullable=False)
+    year = Column(Integer, nullable=False)
+    current_number = Column(Integer, nullable=False, default=0)
+    padding = Column(Integer, nullable=False, default=5)
+    # Phase 12'de kullanilacak; simdilik nullable
+    tenant_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # PostgreSQL'de NULL'lar birbirinden farkli sayilir; duz bir
+    # UNIQUE(doc_type, year, tenant_id) kisiti tenant_id NULL iken MUKERRER
+    # satira izin verir. Bu yuzden iki ayri KISMI unique index kullaniliyor.
+    __table_args__ = (
+        Index(
+            'uq_naming_series_global',
+            'doc_type', 'year',
+            unique=True,
+            postgresql_where=text('tenant_id IS NULL'),
+        ),
+        Index(
+            'uq_naming_series_tenant',
+            'doc_type', 'year', 'tenant_id',
+            unique=True,
+            postgresql_where=text('tenant_id IS NOT NULL'),
+        ),
+    )
+
+
+class AuditLog(Base):
+    """Kim, ne zaman, hangi alani nasil degistirdi.
+
+    Satirlar degismezdir; yalnizca INSERT edilir.
+    """
+    __tablename__ = 'audit_logs'
+    id = Column(Integer, primary_key=True)
+    table_name = Column(String(64), nullable=False)
+    record_id = Column(Integer, nullable=True)
+    action = Column(String(20), nullable=False)  # create|update|delete|submit|cancel
+    field_name = Column(String(64), nullable=True)
+    old_value = Column(Text, nullable=True)
+    new_value = Column(Text, nullable=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
+    ip_address = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index('ix_audit_table_record', 'table_name', 'record_id'),
+        Index('ix_audit_created_at', 'created_at'),
+    )
+
+
+class DocumentImmutableError(Exception):
+    """Onaylanmis/iptal edilmis belge degistirilmeye calisildiginda firlatilir."""

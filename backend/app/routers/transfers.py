@@ -12,29 +12,15 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Product, StockTransfer, StockTransferItem, User
-from ..schemas import StockTransferCreate, StockTransferResponse
-from ..services import stock_service
+from ..models import DocStatus, Product, StockTransfer, StockTransferItem, User
+from ..schemas import CancelRequest, StockTransferCreate, StockTransferResponse
+from ..services import document_service, stock_service
 
 router = APIRouter(
     prefix='/api/transfers',
     tags=['transfers'],
     dependencies=[Depends(get_current_user)],
 )
-
-
-def _next_transfer_no(db: Session) -> str:
-    """TRF-YYYY-000001 formatinda sira numarasi uretir."""
-    year = date.today().year
-    prefix = f'TRF-{year}-'
-    last = (
-        db.query(StockTransfer.transfer_no)
-        .filter(StockTransfer.transfer_no.like(f'{prefix}%'))
-        .order_by(StockTransfer.transfer_no.desc())
-        .first()
-    )
-    seq = int(last[0].rsplit('-', 1)[1]) + 1 if last else 1
-    return f'{prefix}{seq:06d}'
 
 
 def _load(db: Session, transfer_id: int) -> StockTransfer:
@@ -61,6 +47,9 @@ def _serialize(transfer: StockTransfer) -> dict:
         'to_warehouse_id': transfer.to_warehouse_id,
         'transfer_date': transfer.transfer_date,
         'status': transfer.status,
+        'docstatus': transfer.docstatus,
+        'docstatus_label': DocStatus.LABELS.get(transfer.docstatus),
+        'cancel_reason': transfer.cancel_reason,
         'note': transfer.note,
         'created_by': transfer.created_by,
         'created_at': transfer.created_at,
@@ -117,12 +106,13 @@ def create_transfer(
                 ),
             )
 
+    # Phase 11: numara ve stok hareketi ONAY aninda, document_service uzerinden
     transfer = StockTransfer(
-        transfer_no=_next_transfer_no(db),
+        transfer_no=None,
         from_warehouse_id=from_id,
         to_warehouse_id=to_id,
         transfer_date=payload.transfer_date or date.today(),
-        status='completed',
+        status='draft',
         note=payload.note,
         created_by=current_user.id,
     )
@@ -136,15 +126,9 @@ def create_transfer(
     db.add(transfer)
     db.flush()  # transfer.id ledger ref_id olarak lazim
 
-    for product_id, qty in totals.items():
-        stock_service.add_entry(
-            db, product_id, from_id, -qty, 'transfer_cikis',
-            ref_type='transfer', ref_id=transfer.id, user_id=current_user.id,
-        )
-        stock_service.add_entry(
-            db, product_id, to_id, qty, 'transfer_giris',
-            ref_type='transfer', ref_id=transfer.id, user_id=current_user.id,
-        )
+    if not payload.save_as_draft:
+        document_service.submit(db, transfer, user_id=current_user.id)
+        transfer.status = 'completed'
 
     try:
         db.commit()
@@ -177,4 +161,44 @@ def list_transfers(
 
 @router.get('/{transfer_id}', response_model=StockTransferResponse)
 def get_transfer(transfer_id: int, db: Session = Depends(get_db)):
+    return _serialize(_load(db, transfer_id))
+
+
+@router.post('/{transfer_id}/submit', response_model=StockTransferResponse)
+def submit_transfer(
+    transfer_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Taslak transferi onaylar: numara atanir, iki ledger satiri olusur."""
+    transfer = _load(db, transfer_id)
+    document_service.submit(db, transfer, user_id=current_user.id)
+    transfer.status = 'completed'
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f'Transfer onaylanamadi: {exc}')
+    return _serialize(_load(db, transfer_id))
+
+
+@router.post('/{transfer_id}/cancel', response_model=StockTransferResponse)
+def cancel_transfer(
+    transfer_id: int,
+    payload: CancelRequest | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Onayli transferi iptal eder: hareketler ters kayitla geri alinir."""
+    transfer = _load(db, transfer_id)
+    document_service.cancel(
+        db, transfer, user_id=current_user.id,
+        reason=payload.reason if payload else None,
+    )
+    transfer.status = 'cancelled'
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f'Transfer iptal edilemedi: {exc}')
     return _serialize(_load(db, transfer_id))

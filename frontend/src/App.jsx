@@ -5,6 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Sidebar from './components/Sidebar';
 import { AlertsProvider } from './context/AlertsContext';
 import { AuthProvider } from './context/AuthContext';
+import AuditLog from './pages/AuditLog';
 import Customers from './pages/Customers';
 import Dashboard from './pages/Dashboard';
 import Invoices from './pages/Invoices';
@@ -58,6 +59,10 @@ export default function App() {
           <Route path="/stock/ledger" element={<Protected><StockLedger /></Protected>} />
           <Route path="/transfers" element={<Protected><Transfers /></Protected>} />
           <Route path="/users" element={<Protected adminOnly><Users /></Protected>} />
+          <Route
+            path="/audit-log"
+            element={<Protected adminOnly><AuditLog /></Protected>}
+          />
           <Route
             path="*"
             element={

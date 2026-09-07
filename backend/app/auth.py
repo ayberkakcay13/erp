@@ -92,3 +92,20 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
             detail='Bu islem icin admin yetkisi gerekli',
         )
     return current_user
+
+
+def user_id_from_token(authorization: str | None) -> int | None:
+    """Authorization header'indan kullanici id'sini cozer, dogrulanamazsa None.
+
+    Denetim izi middleware'i icin var: veritabanina gitmeden, istek
+    baglaminda (threadpool'a girmeden once) kullaniciyi ogrenmek gerekiyor.
+    Yetkilendirme karari BURADA VERILMEZ - o is get_current_user'in.
+    """
+    if not authorization or not authorization.lower().startswith('bearer '):
+        return None
+    token = authorization.split(' ', 1)[1].strip()
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return int(payload['sub'])
+    except (jwt.InvalidTokenError, KeyError, TypeError, ValueError):
+        return None

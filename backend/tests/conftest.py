@@ -28,6 +28,7 @@ TEST_ADMIN_PASSWORD = 'pytest-admin-123'
 
 # Silme sirasi FK bagimliliklarini takip eder (once cocuk, sonra ebeveyn)
 CLEANUP_ORDER = [
+    ('audit_logs', 'id'),
     ('stock_ledger_entries', 'id'),
     ('stock_transfer_items', 'id'),
     ('stock_transfers', 'id'),
@@ -93,6 +94,15 @@ def admin_user():
             conn.execute(
                 text('UPDATE stock_transfers SET created_by = NULL WHERE created_by = :i'),
                 {'i': user_id},
+            )
+            for column in ('submitted_by', 'cancelled_by'):
+                for table in ('sales', 'invoices', 'stock_transfers'):
+                    conn.execute(
+                        text(f'UPDATE {table} SET {column} = NULL WHERE {column} = :i'),
+                        {'i': user_id},
+                    )
+            conn.execute(
+                text('DELETE FROM audit_logs WHERE user_id = :i'), {'i': user_id}
             )
             conn.execute(text('DELETE FROM users WHERE id = :i'), {'i': user_id})
 
@@ -174,6 +184,26 @@ class Tracker:
                     {'t': transfer_id},
                 ):
                     self.add('stock_transfer_items', row[0])
+
+            # Phase 11: takip edilen kayitlarin denetim izi satirlari da silinir
+            audited = {
+                'sales': 'sales', 'products': 'products', 'customers': 'customers',
+                'invoices': 'invoices', 'warehouses': 'warehouses',
+                'stock_transfers': 'stock_transfers', 'sales_items': 'sales_items',
+                'stock_transfer_items': 'stock_transfer_items',
+            }
+            for table, log_table in audited.items():
+                ids = self._rows.get(table)
+                if not ids:
+                    continue
+                for row in conn.execute(
+                    text(
+                        'SELECT id FROM audit_logs '
+                        'WHERE table_name = :t AND record_id = ANY(:ids)'
+                    ),
+                    {'t': log_table, 'ids': list(ids)},
+                ):
+                    self.add('audit_logs', row[0])
 
             for table, pk in CLEANUP_ORDER:
                 ids = self._rows.get(table)

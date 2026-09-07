@@ -96,6 +96,9 @@ class SaleCreate(BaseModel):
     customer_id: int
     sale_date: Optional[date] = None
     items: List[SalesItemCreate] = Field(min_length=1)
+    # Phase 11: varsayilan davranis "olustur ve onayla" (stok hareketi olusur).
+    # true verilirse belge taslak kalir, stok hareketi onaya kadar yazilmaz.
+    save_as_draft: bool = False
 
 
 class SaleStatusUpdate(BaseModel):
@@ -110,6 +113,13 @@ class SaleResponse(BaseModel):
     sale_date: date
     total_amount: Decimal
     status: str
+    docstatus: int = 0
+    docstatus_label: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    submitted_by: Optional[int] = None
+    cancelled_at: Optional[datetime] = None
+    cancelled_by: Optional[int] = None
+    cancel_reason: Optional[str] = None
     created_at: Optional[datetime] = None
     customer: Optional[CustomerResponse] = None
     items: List[SalesItemResponse] = []
@@ -121,6 +131,8 @@ class InvoiceCreate(BaseModel):
     """POST /api/sales/{sale_id}/invoice govdesi - hepsi opsiyonel."""
     issued_date: Optional[date] = None
     tax_rate: Decimal = Field(default=Decimal('0'), ge=0, le=1, description='0.20 = %20 KDV')
+    # Phase 11: taslak fatura numara almaz; numara onay aninda atanir
+    save_as_draft: bool = False
 
 
 class InvoiceStatusUpdate(BaseModel):
@@ -132,11 +144,18 @@ class InvoiceResponse(BaseModel):
 
     id: int
     sale_id: int
-    invoice_number: str
+    invoice_number: Optional[str] = None
     customer_id: int
     issued_date: date
     total_amount: Decimal
     status: str
+    docstatus: int = 0
+    docstatus_label: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    submitted_by: Optional[int] = None
+    cancelled_at: Optional[datetime] = None
+    cancelled_by: Optional[int] = None
+    cancel_reason: Optional[str] = None
     created_at: Optional[datetime] = None
 
 
@@ -269,6 +288,8 @@ class StockTransferCreate(BaseModel):
     transfer_date: Optional[date] = None
     note: Optional[str] = None
     items: List[StockTransferItemCreate] = Field(min_length=1)
+    # Phase 11: varsayilan "olustur ve onayla"; taslak transfer stok hareketi yazmaz
+    save_as_draft: bool = False
 
 
 class StockTransferResponse(BaseModel):
@@ -280,9 +301,70 @@ class StockTransferResponse(BaseModel):
     to_warehouse_id: int
     transfer_date: date
     status: str
+    docstatus: int = 0
+    docstatus_label: Optional[str] = None
+    cancel_reason: Optional[str] = None
     note: Optional[str] = None
     created_by: Optional[int] = None
     created_at: Optional[datetime] = None
     from_warehouse_name: Optional[str] = None
     to_warehouse_name: Optional[str] = None
     items: List[StockTransferItemResponse] = []
+
+
+# ---------------- Phase 11: Belge durumu / numaralandirma / denetim izi ----------------
+
+DOCSTATUS_LABELS = {0: 'taslak', 1: 'onayli', 2: 'iptal'}
+
+
+class DocumentStatusFields(BaseModel):
+    """Belge yasam dongusu alanlari - response modellerine karistirilir."""
+    docstatus: int = 0
+    docstatus_label: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    submitted_by: Optional[int] = None
+    cancelled_at: Optional[datetime] = None
+    cancelled_by: Optional[int] = None
+    cancel_reason: Optional[str] = None
+
+
+class CancelRequest(BaseModel):
+    """Iptal isleminde sebep sorulur."""
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class NamingSeriesResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    doc_type: str
+    prefix: str
+    year: int
+    current_number: int
+    padding: int
+    tenant_id: Optional[int] = None
+    next_number: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class NamingSeriesUpdate(BaseModel):
+    """Sadece admin. current_number geriye alinamaz - numara tekrari olusur."""
+    prefix: Optional[str] = Field(default=None, min_length=1, max_length=20)
+    padding: Optional[int] = Field(default=None, ge=1, le=12)
+    current_number: Optional[int] = Field(default=None, ge=0)
+
+
+class AuditLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    table_name: str
+    record_id: Optional[int] = None
+    action: str
+    field_name: Optional[str] = None
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    user_id: Optional[int] = None
+    user_email: Optional[str] = None
+    ip_address: Optional[str] = None
+    created_at: Optional[datetime] = None

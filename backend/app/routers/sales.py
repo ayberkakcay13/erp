@@ -15,9 +15,9 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Customer, Product, Sale, SalesItem, User
-from ..schemas import SaleCreate, SaleResponse, SaleStatusUpdate
-from ..services import stock_service
+from ..models import Customer, DocStatus, Product, Sale, SalesItem, User
+from ..schemas import CancelRequest, SaleCreate, SaleResponse, SaleStatusUpdate
+from ..services import document_service, stock_service
 
 router = APIRouter(
     prefix='/api/sales',
@@ -57,6 +57,13 @@ def _serialize(sale: Sale) -> dict:
         'sale_date': sale.sale_date,
         'total_amount': sale.total_amount,
         'status': sale.status,
+        'docstatus': sale.docstatus,
+        'docstatus_label': DocStatus.LABELS.get(sale.docstatus),
+        'submitted_at': sale.submitted_at,
+        'submitted_by': sale.submitted_by,
+        'cancelled_at': sale.cancelled_at,
+        'cancelled_by': sale.cancelled_by,
+        'cancel_reason': sale.cancel_reason,
         'created_at': sale.created_at,
         'customer': sale.customer,
         'items': [
@@ -112,8 +119,9 @@ def create_sale(
 
     requested = _requested_by_product_warehouse(db, payload.items)
 
-    # Stok kontrolu: yetersizse hicbir kayit olusmadan 400 don
-    for (product_id, wh_id), quantity in requested.items():
+    # Stok kontrolu: yetersizse hicbir kayit olusmadan 400 don.
+    # Taslak satis stok tutmaz; kontrol onay aninda tekrar yapilir.
+    for (product_id, wh_id), quantity in ({} if payload.save_as_draft else requested).items():
         if not stock_service.check_availability(db, product_id, wh_id, quantity):
             product = db.get(Product, product_id)
             available = stock_service.get_stock(db, product_id, wh_id)
@@ -152,18 +160,10 @@ def create_sale(
     db.add(sale)
     db.flush()  # sale.id ledger ref_id olarak lazim
 
-    # Stok dusur - satis kaydiyla ayni transaction'da, commit birlikte
-    for (product_id, wh_id), quantity in requested.items():
-        stock_service.add_entry(
-            db,
-            product_id=product_id,
-            warehouse_id=wh_id,
-            change_qty=-quantity,
-            reason='satis',
-            ref_type='sale',
-            ref_id=sale.id,
-            user_id=current_user.id,
-        )
+    # Phase 11: stok hareketi artik ONAY aninda, document_service uzerinden olusur.
+    # Varsayilan davranis "olustur ve onayla" - save_as_draft=true ile taslak kalir.
+    if not payload.save_as_draft:
+        document_service.submit(db, sale, user_id=current_user.id)
 
     try:
         db.commit()
@@ -197,11 +197,6 @@ def get_sale(sale_id: int, db: Session = Depends(get_db)):
     return _serialize(_load_sale(db, sale_id))
 
 
-def _item_totals(db: Session, sale: Sale) -> dict:
-    """Satistaki (urun, depo) basina toplam miktar."""
-    return _requested_by_product_warehouse(db, sale.items)
-
-
 @router.put('/{sale_id}', response_model=SaleResponse)
 def update_sale_status(
     sale_id: int,
@@ -209,65 +204,99 @@ def update_sale_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Satis durumunu gunceller ve stogu duruma gore geri ekler/yeniden duser.
+    """Satisin IS durumunu gunceller (pending / completed / cancelled).
 
-    Stok mantigi: "cancelled" disindaki her durumda satis stogu tutuyor sayilir.
-    - cancelled disi -> cancelled : ledger'a +qty (`satis_iptal`)
-    - cancelled -> cancelled disi : ledger'a -qty (`satis`), yetersizse 400
-    - ayni gruptaki gecisler (pending <-> completed) stogu etkilemez
+    Phase 11 ile birlikte `status` ve `docstatus` ayri kavramlar:
+    - `status` is akisi (beklemede / tamamlandi)
+    - `docstatus` belge yasam dongusu (taslak / onayli / iptal)
 
-    Durum degismiyorsa hicbir stok hareketi olmaz, bu sayede ayni istegi
-    tekrarlamak stogu ikinci kez degistirmez (idempotent).
+    "cancelled" gonderilmesi belgeyi iptal eder; iptal `document_service`
+    uzerinden gecer ve stok ters kaydi orada olusur. Iptal edilmis bir belge
+    TEKRAR ONAYLANAMAZ - duzeltme icin yeni satis olusturulur. (Bu kural
+    Phase 4/10'daki "iptali geri al" davranisinin yerini alir.)
     """
     sale = _load_sale(db, sale_id)
-    old_status = sale.status
     new_status = payload.status
 
-    was_cancelled = old_status == 'cancelled'
-    will_be_cancelled = new_status == 'cancelled'
+    if new_status == 'cancelled':
+        if sale.docstatus == DocStatus.CANCELLED:
+            return _serialize(sale)  # zaten iptal - idempotent
+        if sale.docstatus == DocStatus.DRAFT:
+            raise HTTPException(
+                status_code=400,
+                detail='Taslak satis iptal edilemez, silinebilir',
+            )
+        document_service.cancel(db, sale, user_id=current_user.id)
+        sale.status = 'cancelled'
+    else:
+        if sale.docstatus == DocStatus.CANCELLED:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    'Iptal edilmis satis tekrar acilamaz. '
+                    'Duzeltme icin yeni bir satis olusturun.'
+                ),
+            )
+        sale.status = new_status
 
-    # Stok yalnizca "iptal" sinirini gecerken hareket eder
-    restore_stock = not was_cancelled and will_be_cancelled
-    deduct_stock = was_cancelled and not will_be_cancelled
-
-    totals = _item_totals(db, sale) if (restore_stock or deduct_stock) else {}
-
-    if deduct_stock:
-        # Iptal geri alindi: stok yeniden dusulecek, once yeterli mi kontrol et
-        for (product_id, wh_id), quantity in totals.items():
-            product = db.get(Product, product_id)
-            if product is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f'Product {product_id} bulunamadi, satis geri alinamiyor',
-                )
-            if not stock_service.check_availability(db, product_id, wh_id, quantity):
-                available = stock_service.get_stock(db, product_id, wh_id)
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f'Iptal geri alinamiyor: "{product.name}" icin stok yetersiz. '
-                        f'{quantity} adet gerekli, stokta {available} adet var'
-                    ),
-                )
-
-    for (product_id, wh_id), quantity in totals.items():
-        stock_service.add_entry(
-            db,
-            product_id=product_id,
-            warehouse_id=wh_id,
-            change_qty=quantity if restore_stock else -quantity,
-            reason='satis_iptal' if restore_stock else 'satis',
-            ref_type='sale',
-            ref_id=sale.id,
-            user_id=current_user.id,
-            note=f'Satis durumu {old_status} -> {new_status}',
-        )
-
-    sale.status = new_status
     try:
         db.commit()
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f'Durum guncellenemedi: {exc}')
     return _serialize(_load_sale(db, sale_id))
+
+
+@router.post('/{sale_id}/submit', response_model=SaleResponse)
+def submit_sale(
+    sale_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Taslak satisi onaylar: stok hareketi bu anda olusur."""
+    sale = _load_sale(db, sale_id)
+    document_service.submit(db, sale, user_id=current_user.id)
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f'Satis onaylanamadi: {exc}')
+    return _serialize(_load_sale(db, sale_id))
+
+
+@router.post('/{sale_id}/cancel', response_model=SaleResponse)
+def cancel_sale(
+    sale_id: int,
+    payload: CancelRequest | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Onayli satisi iptal eder: stok ters kaydi olusur, belge kilitli kalir."""
+    sale = _load_sale(db, sale_id)
+    reason = payload.reason if payload else None
+    document_service.cancel(db, sale, user_id=current_user.id, reason=reason)
+    sale.status = 'cancelled'
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f'Satis iptal edilemedi: {exc}')
+    return _serialize(_load_sale(db, sale_id))
+
+
+@router.delete('/{sale_id}', status_code=status.HTTP_204_NO_CONTENT)
+def delete_sale(
+    sale_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Yalnizca TASLAK satis silinebilir; onayli/iptal belge silinmez."""
+    sale = _load_sale(db, sale_id)
+    document_service.ensure_deletable(sale)
+    try:
+        db.delete(sale)
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f'Satis silinemedi: {exc}')
+    return None

@@ -1,4 +1,4 @@
-﻿import os
+import os
 from pathlib import Path
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -18,6 +18,16 @@ if 'sslmode' not in DATABASE_URL:
 engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+# Phase 11: denetim izi + belge degismezligi dinleyicileri tum session'lara baglanir
+def _register_audit_listeners() -> None:
+    from .services import audit_service  # gec import: dairesel bagimliligi kirar
+
+    audit_service.register(SessionLocal)
+
+
+_register_audit_listeners()
+
 
 def get_db():
     db = SessionLocal()

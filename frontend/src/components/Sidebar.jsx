@@ -11,6 +11,7 @@ const links = [
   { to: '/stock/ledger', label: 'Stok Hareketleri' },
   { to: '/transfers', label: 'Transferler' },
   { to: '/users', label: 'Kullanicilar', adminOnly: true },
+  { to: '/audit-log', label: 'Denetim Izi', adminOnly: true },
 ];
 
 export default function Sidebar() {

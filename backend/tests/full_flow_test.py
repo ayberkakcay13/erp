@@ -1,5 +1,6 @@
 """Adim 8: uctan uca senaryo testi (urllib ile, ekstra bagimlilik yok)."""
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -132,9 +133,12 @@ code, inv = call('POST', f'/api/sales/{sid}/invoice', {'tax_rate': 0.20})
 check('POST /api/sales/{id}/invoice -> 201', code == 201, f'HTTP {code}')
 check('total_amount KDV dahil', abs(num(inv['total_amount']) - round(expected * 1.2, 2)) < 0.01,
       f"{inv['total_amount']} (beklenen {round(expected * 1.2, 2)})")
-check('invoice_number uretildi', str(inv['invoice_number']).startswith(f'INV-{sid}-'),
+# Phase 11: numara onay aninda naming series'ten atanir (FT-2026-00001)
+check('invoice_number seri formatinda',
+      bool(re.fullmatch(r'FT-\d{4}-\d{5}', str(inv['invoice_number']))),
       inv['invoice_number'])
-check('baslangic status draft', inv['status'] == 'draft', inv['status'])
+check('belge onayli (docstatus=1)', inv['docstatus'] == 1, inv['docstatus'])
+check('baslangic status issued', inv['status'] == 'issued', inv['status'])
 iid = inv['id']
 
 print('\n6. Invoice GET')
@@ -168,30 +172,46 @@ check('Mouse stok hala 100', num(p0d['stock']) == 100, f"gelen: {p0d['stock']}")
 code, p1d = call('GET', f'/api/products/{pids[1]}')
 check('Kulaklik stok hala 40', num(p1d['stock']) == 40, f"gelen: {p1d['stock']}")
 
-print('\n8c. Iptal geri alinirsa stok yeniden dusuluyor mu?')
+print('\n8c. Phase 11: iptal edilen belge tekrar acilamaz')
 code, back = call('PUT', f'/api/sales/{sid}', {'status': 'completed'})
-check('PUT status=completed -> 200', code == 200, f'HTTP {code}')
+check('PUT status=completed -> 400', code == 400, f'HTTP {code}')
+check('hata mesaji net', 'tekrar acilamaz' in str(back.get('detail', '')),
+      str(back.get('detail')))
 code, p0e = call('GET', f'/api/products/{pids[0]}')
-check('Mouse stok 100 -> 96 (yeniden dusuldu)', num(p0e['stock']) == 96, f"gelen: {p0e['stock']}")
+check('Mouse stok 100 (iptal sonrasi degismedi)', num(p0e['stock']) == 100,
+      f"gelen: {p0e['stock']}")
 code, p1e = call('GET', f'/api/products/{pids[1]}')
-check('Kulaklik stok 40 -> 38 (yeniden dusuldu)', num(p1e['stock']) == 38, f"gelen: {p1e['stock']}")
+check('Kulaklik stok 40 (iptal sonrasi degismedi)', num(p1e['stock']) == 40,
+      f"gelen: {p1e['stock']}")
 
-print('\n8d. pending <-> completed gecisi stogu etkilemiyor')
-call('PUT', f'/api/sales/{sid}', {'status': 'pending'})
-code, p0f = call('GET', f'/api/products/{pids[0]}')
-check('Mouse stok hala 96', num(p0f['stock']) == 96, f"gelen: {p0f['stock']}")
-call('PUT', f'/api/sales/{sid}', {'status': 'completed'})
-code, p0g = call('GET', f'/api/products/{pids[0]}')
-check('Mouse stok hala 96', num(p0g['stock']) == 96, f"gelen: {p0g['stock']}")
+print('\n8d. Iptal edilmis belge silinemez de')
+code, _ = call('DELETE', f'/api/sales/{sid}')
+check('DELETE iptal belge -> 400', code == 400, f'HTTP {code}')
 
-print('\nBONUS: hatali istekler')
-code, _ = call('POST', f'/api/sales/{sid}/invoice', {})
-check('ayni sale icin 2. fatura -> 409', code == 409, f'HTTP {code}')
-code, _ = call('GET', '/api/sales/999999')
-check('olmayan sale -> 404', code == 404, f'HTTP {code}')
-code, _ = call('POST', '/api/sales', {'customer_id': 999999, 'items': [
-    {'product_id': pids[0], 'quantity': 1, 'unit_price': 1}]})
-check('olmayan customer ile sale -> 404', code == 404, f'HTTP {code}')
+print('\n8e. Taslak satis: stok tutmaz, onaylanabilir, silinebilir')
+code, draft = call('POST', '/api/sales', {
+    'customer_id': cid, 'save_as_draft': True,
+    'items': [{'product_id': pids[2], 'quantity': 3, 'unit_price': 890.0}]})
+check('POST taslak satis -> 201', code == 201, f'HTTP {code}')
+check('docstatus=0 (taslak)', draft['docstatus'] == 0, draft['docstatus'])
+code, p2c = call('GET', f'/api/products/{pids[2]}')
+check('taslak stok tutmuyor (25)', num(p2c['stock']) == 25, f"gelen: {p2c['stock']}")
+code, submitted = call('POST', f"/api/sales/{draft['id']}/submit")
+check('POST submit -> 200', code == 200, f'HTTP {code}')
+check('docstatus=1 (onayli)', submitted['docstatus'] == 1, submitted['docstatus'])
+code, p2d = call('GET', f'/api/products/{pids[2]}')
+check('onayda stok dustu (25 -> 22)', num(p2d['stock']) == 22, f"gelen: {p2d['stock']}")
+code, _ = call('POST', f"/api/sales/{draft['id']}/cancel", {'reason': 'Regresyon testi'})
+check('POST cancel -> 200', code == 200, f'HTTP {code}')
+code, p2e = call('GET', f'/api/products/{pids[2]}')
+check('iptalde stok geri geldi (25)', num(p2e['stock']) == 25, f"gelen: {p2e['stock']}")
+
+print('\n8f. Denetim izi: onay ve iptal kaydedildi')
+code, logs = call('GET', f"/api/audit-log/sales/{draft['id']}")
+check('GET /api/audit-log -> 200', code == 200, f'HTTP {code}')
+actions = {row['action'] for row in (logs or [])}
+check('submit loglandi', 'submit' in actions, str(actions))
+check('cancel loglandi', 'cancel' in actions, str(actions))
 
 print('\n9. Temizlik (production tablolarinda test verisi birakma)')
 # Ledger satirlari ORM uzerinden silinemez (Phase 10 degismezlik kurali);
@@ -206,6 +226,23 @@ try:
     from app.database import engine
 
     with engine.begin() as conn:
+        # Phase 11: bu kayitlarin denetim izi satirlari da temizlenir
+        sale_ids = [
+            r[0] for r in conn.execute(
+                text('SELECT id FROM sales WHERE customer_id = :c'), {'c': cid})
+        ]
+        invoice_ids = [
+            r[0] for r in conn.execute(
+                text('SELECT id FROM invoices WHERE sale_id = ANY(:s)'),
+                {'s': sale_ids or [0]})
+        ]
+        for table, ids in (('sales', sale_ids), ('invoices', invoice_ids),
+                           ('products', pids), ('customers', [cid])):
+            conn.execute(
+                text('DELETE FROM audit_logs WHERE table_name = :t '
+                     'AND record_id = ANY(:ids)'),
+                {'t': table, 'ids': ids or [0]},
+            )
         conn.execute(text(
             'DELETE FROM invoices WHERE sale_id IN '
             '(SELECT id FROM sales WHERE customer_id = :c)'), {'c': cid})

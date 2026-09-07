@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import FilterBar, { FilterField, SearchInput, SelectFilter } from '../components/FilterBar';
+import { DocStatusBadge } from '../components/DocStatus';
 import SalesForm from '../components/SalesForm';
 import {
   Badge,
@@ -205,7 +206,8 @@ export default function Sales() {
                     {sort.key === 'total_amount' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
                   </span>
                 </th>
-                <th className="text-left px-4 py-2 font-medium">Durum</th>
+                <th className="text-left px-4 py-2 font-medium">Is Durumu</th>
+                <th className="text-left px-4 py-2 font-medium">Belge</th>
                 <th className="text-right px-4 py-2 font-medium">Islem</th>
               </tr>
             </thead>
@@ -223,6 +225,12 @@ export default function Sales() {
                     <Badge tone={statusTone[s.status] ?? 'gray'}>
                       {statusLabel[s.status] ?? s.status}
                     </Badge>
+                  </td>
+                  <td className="px-4 py-2">
+                    <DocStatusBadge
+                      docstatus={s.docstatus}
+                      testid={`docstatus-${s.id}`}
+                    />
                   </td>
                   <td className="px-4 py-2 text-right">
                     <Link

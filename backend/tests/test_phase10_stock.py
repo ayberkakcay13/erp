@@ -157,7 +157,10 @@ def test_iptal_stogu_geri_ekler(client, tracker):
     assert Decimal(str(entries[0]['change_qty'])) == Decimal('5')
 
 
-def test_iptalden_geri_donus_tekrar_duser(client, tracker):
+def test_iptal_edilen_satis_tekrar_acilamaz(client, tracker):
+    """Phase 11 kurali Phase 4/10'daki "iptali geri al" davranisinin yerini aldi:
+    iptal edilmis belge tekrar onaylanamaz, duzeltme icin yeni satis kesilir.
+    """
     customer = make_customer(client, tracker)
     product = make_product(client, tracker, stock='20')
 
@@ -168,12 +171,14 @@ def test_iptalden_geri_donus_tekrar_duser(client, tracker):
     assert stock_of(client, product['id']) == Decimal('20')
 
     response = client.put(f'/api/sales/{sale["id"]}', json={'status': 'completed'})
-    assert response.status_code == 200, response.text
-    assert stock_of(client, product['id']) == Decimal('15')
+    assert response.status_code == 400, response.text
+    assert 'tekrar acilamaz' in response.json()['detail']
+    # Stok iptalden sonraki halinde kalir
+    assert stock_of(client, product['id']) == Decimal('20')
 
 
 def test_ayni_durumu_tekrar_gondermek_stogu_degistirmez(client, tracker):
-    """Idempotentlik: pending -> pending / cancelled -> cancelled hareket yazmaz."""
+    """Idempotentlik: tekrarlanan durum gecisleri ikinci kez stok hareketi yazmaz."""
     customer = make_customer(client, tracker)
     product = make_product(client, tracker, stock='20')
 
@@ -181,15 +186,16 @@ def test_ayni_durumu_tekrar_gondermek_stogu_degistirmez(client, tracker):
         {'product_id': product['id'], 'quantity': 5, 'unit_price': '10.00'},
     ]).json()
 
+    # pending <-> completed is durumu gecisleri stogu etkilemez
+    client.put(f'/api/sales/{sale["id"]}', json={'status': 'completed'})
+    client.put(f'/api/sales/{sale["id"]}', json={'status': 'pending'})
+    assert stock_of(client, product['id']) == Decimal('15')
+
+    # Iptal bir kez isler; tekrari sessizce yok sayilir
     client.put(f'/api/sales/{sale["id"]}', json={'status': 'cancelled'})
     client.put(f'/api/sales/{sale["id"]}', json={'status': 'cancelled'})
     client.put(f'/api/sales/{sale["id"]}', json={'status': 'cancelled'})
     assert stock_of(client, product['id']) == Decimal('20')
-
-    # pending <-> completed stogu etkilemez
-    client.put(f'/api/sales/{sale["id"]}', json={'status': 'completed'})
-    client.put(f'/api/sales/{sale["id"]}', json={'status': 'pending'})
-    assert stock_of(client, product['id']) == Decimal('15')
 
 
 # ---------------- 4. Yetersiz stok ----------------
@@ -209,15 +215,19 @@ def test_yetersiz_stokta_400_ve_kayit_olusmaz(client, tracker):
     assert client.get('/api/sales', params={'customer_id': customer['id']}).json() == []
 
 
-def test_iptal_geri_alinamiyorsa_400(client, tracker):
-    """Iptal edilen satis geri alinirken stok yetmiyorsa 400 doner."""
+def test_taslak_satis_onayinda_stok_yetmezse_400(client, tracker):
+    """Taslak satis stok tutmaz; onay aninda stok yetmiyorsa 400 doner."""
     customer = make_customer(client, tracker)
     product = make_product(client, tracker, stock='10')
 
-    sale = make_sale(client, tracker, customer['id'], [
-        {'product_id': product['id'], 'quantity': 10, 'unit_price': '10.00'},
-    ]).json()
-    client.put(f'/api/sales/{sale["id"]}', json={'status': 'cancelled'})
+    draft = client.post('/api/sales', json={
+        'customer_id': customer['id'],
+        'save_as_draft': True,
+        'items': [{'product_id': product['id'], 'quantity': 10, 'unit_price': '10.00'}],
+    })
+    assert draft.status_code == 201, draft.text
+    tracker.add('sales', draft.json()['id'])
+    assert stock_of(client, product['id']) == Decimal('10')  # taslak stok tutmaz
 
     # Stogu baska bir satisla tuket
     other = make_sale(client, tracker, customer['id'], [
@@ -226,7 +236,7 @@ def test_iptal_geri_alinamiyorsa_400(client, tracker):
     assert other.status_code == 201
     assert stock_of(client, product['id']) == Decimal('0')
 
-    response = client.put(f'/api/sales/{sale["id"]}', json={'status': 'completed'})
+    response = client.post(f'/api/sales/{draft.json()["id"]}/submit')
     assert response.status_code == 400, response.text
     assert 'stok yetersiz' in response.json()['detail']
 
@@ -274,7 +284,7 @@ def test_transfer_toplam_stogu_degistirmez(client, tracker):
     assert response.status_code == 201, response.text
     transfer = response.json()
     tracker.add('stock_transfers', transfer['id'])
-    assert transfer['transfer_no'].startswith('TRF-')
+    assert transfer['transfer_no'].startswith('TR-')
 
     assert stock_of(client, product['id'], source['id']) == Decimal('18')
     assert stock_of(client, product['id'], target['id']) == Decimal('12')
