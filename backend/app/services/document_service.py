@@ -17,7 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models import DocStatus, Invoice, Sale, StockTransfer
-from . import audit_service, naming_service, stock_service
+from . import audit_service, naming_service, stock_service, tenant_context
 
 # Belge tipi -> (numaralandirma doc_type, numara alani)
 NUMBERING = {
@@ -121,7 +121,14 @@ def submit(db: Session, doc, user_id: Optional[int] = None):
     doc_type, number_field = NUMBERING.get(type(doc), (None, None))
     if doc_type and number_field and not getattr(doc, number_field, None):
         # Numara ONAY aninda atanir; silinen taslaklar bosluk birakmasin
-        setattr(doc, number_field, naming_service.get_next_number(db, doc_type))
+        # Numara serisi tenant bazli: her firmanin kendi FT-2026-00001 dizisi olur
+        setattr(
+            doc,
+            number_field,
+            naming_service.get_next_number(
+                db, doc_type, tenant_id=tenant_context.current_tenant_id.get()
+            ),
+        )
 
     _apply_effects(db, doc, submitting=True, user_id=user_id, note='Belge onaylandi')
 

@@ -14,11 +14,12 @@ from ..schemas import (
     StockLedgerEntryResponse,
 )
 from ..services import stock_service
+from ..services.tenant_service import require_module
 
 router = APIRouter(
     prefix='/api/stock',
     tags=['stock'],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(get_current_user), Depends(require_module('stock'))],
 )
 
 

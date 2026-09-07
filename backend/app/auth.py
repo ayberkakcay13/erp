@@ -43,6 +43,9 @@ def create_access_token(user: User) -> str:
         'sub': str(user.id),
         'email': user.email,
         'role': user.role,
+        # Phase 12: tenant baglami token'da tasinir; her istekte buradan okunur
+        'tenant_id': user.tenant_id,
+        'is_superadmin': bool(user.is_superadmin),
         'iat': now,
         'exp': now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     }
@@ -94,18 +97,39 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
-def user_id_from_token(authorization: str | None) -> int | None:
-    """Authorization header'indan kullanici id'sini cozer, dogrulanamazsa None.
+def claims_from_token(authorization: str | None) -> dict:
+    """Authorization header'indaki JWT'yi cozer, dogrulanamazsa bos sozluk.
 
-    Denetim izi middleware'i icin var: veritabanina gitmeden, istek
-    baglaminda (threadpool'a girmeden once) kullaniciyi ogrenmek gerekiyor.
-    Yetkilendirme karari BURADA VERILMEZ - o is get_current_user'in.
+    Middleware icin var: veritabanina gitmeden, istek baglaminda
+    (threadpool'a girmeden once) kullanici ve tenant bilgisini kurar.
+    YETKILENDIRME KARARI BURADA VERILMEZ - o is get_current_user'in;
+    burasi yalnizca denetim izi ve RLS baglamini hazirlar.
     """
     if not authorization or not authorization.lower().startswith('bearer '):
-        return None
+        return {}
     token = authorization.split(' ', 1)[1].strip()
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return int(payload['sub'])
-    except (jwt.InvalidTokenError, KeyError, TypeError, ValueError):
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except jwt.InvalidTokenError:
+        return {}
+
+
+def user_id_from_token(authorization: str | None) -> int | None:
+    """Token'daki kullanici id'si (denetim izi icin)."""
+    try:
+        return int(claims_from_token(authorization)['sub'])
+    except (KeyError, TypeError, ValueError):
         return None
+
+
+def require_superadmin(current_user: User = Depends(get_current_user)) -> User:
+    """Platform sahibi (tenant'lar ustu) islemler icin.
+
+    Tenant admini kendi firmasinin yoneticisidir; tenant OLUSTURMA,
+    modul acma/kapama gibi platform islemleri superadmin'e aittir.
+    """
+    if not current_user.is_superadmin:
+        raise HTTPException(
+            status_code=403, detail='Bu islem icin platform yoneticisi olmalisin'
+        )
+    return current_user

@@ -13,11 +13,12 @@ from ..schemas import (
     WarehouseUpdate,
 )
 from ..services import stock_service
+from ..services.tenant_service import require_module
 
 router = APIRouter(
     prefix='/api/warehouses',
     tags=['warehouses'],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(get_current_user), Depends(require_module('stock'))],
 )
 
 

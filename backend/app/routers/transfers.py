@@ -15,11 +15,12 @@ from ..database import get_db
 from ..models import DocStatus, Product, StockTransfer, StockTransferItem, User
 from ..schemas import CancelRequest, StockTransferCreate, StockTransferResponse
 from ..services import document_service, stock_service
+from ..services.tenant_service import require_module
 
 router = APIRouter(
     prefix='/api/transfers',
     tags=['transfers'],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(get_current_user), Depends(require_module('stock'))],
 )
 
 

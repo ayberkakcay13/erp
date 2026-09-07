@@ -18,11 +18,12 @@ from ..database import get_db
 from ..models import Customer, DocStatus, Product, Sale, SalesItem, User
 from ..schemas import CancelRequest, SaleCreate, SaleResponse, SaleStatusUpdate
 from ..services import document_service, stock_service
+from ..services.tenant_service import require_module
 
 router = APIRouter(
     prefix='/api/sales',
     tags=['sales'],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(get_current_user), Depends(require_module('sales'))],
 )
 
 CENTS = Decimal('0.01')

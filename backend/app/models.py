@@ -1,31 +1,102 @@
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, ForeignKey, Index, Integer,
-    Numeric, String, Text, text,
+    Numeric, String, Text, UniqueConstraint, text,
 )
 from sqlalchemy import event
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import declared_attr, relationship
 from .database import Base
 from datetime import datetime
+# ---------------- Phase 12: Cok kiracili mimari ----------------
+# Izolasyon satir bazli (`tenant_id`) + PostgreSQL Row Level Security ile
+# saglanir. Uygulama katmaninda WHERE unutulsa bile RLS satiri dondurmez.
 
-class Customer(Base):
+MODULE_CODES = (
+    'sales', 'purchase', 'stock', 'invoice', 'reports',
+    'manufacturing', 'payroll', 'accounting', 'efatura',
+)
+
+# Yeni bir tenant acilirken varsayilan olarak acik gelen modüller
+DEFAULT_ENABLED_MODULES = ('sales', 'stock', 'invoice', 'reports')
+
+TENANT_PLANS = ('free', 'basic', 'pro')
+
+
+class TenantMixin:
+    """tenant_id kolonunu ve indexini tek yerden verir.
+
+    Yeni bir is tablosu eklerken bu mixin'i kullan; RLS migration'i
+    `tenant_id` tasiyan tum tablolari otomatik bulur.
+    """
+
+    @declared_attr
+    def tenant_id(cls):  # noqa: N805
+        return Column(
+            Integer,
+            ForeignKey('tenants.id'),
+            nullable=True,  # migration sonrasi NOT NULL'a cekilir
+            index=True,
+        )
+
+
+class Tenant(Base):
+    __tablename__ = 'tenants'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False)
+    slug = Column(String(63), unique=True, nullable=False)  # subdomain
+    tax_number = Column(String(20), nullable=True)  # VKN
+    is_active = Column(Boolean, nullable=False, default=True)
+    plan = Column(String(20), nullable=False, default='free')
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    modules = relationship(
+        'TenantModule', back_populates='tenant', cascade='all, delete-orphan'
+    )
+
+
+class TenantModule(Base):
+    __tablename__ = 'tenant_modules'
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey('tenants.id'), nullable=False, index=True)
+    module_code = Column(String(30), nullable=False)
+    is_enabled = Column(Boolean, nullable=False, default=True)
+
+    tenant = relationship('Tenant', back_populates='modules')
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'module_code', name='uq_tenant_module'),
+    )
+
+
+
+class Customer(TenantMixin, Base):
     __tablename__ = 'customers'
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
-    email = Column(String(255), unique=True, nullable=False)
+    # Phase 12: e-posta artik TENANT ICINDE tekil - iki firma ayni musteriyle calisabilir
+    email = Column(String(255), nullable=False)
     phone = Column(String(20))
     created_at = Column(DateTime, default=datetime.utcnow)
     sales = relationship('Sale', back_populates='customer', cascade='all, delete-orphan')
 
-class Product(Base):
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'email', name='uq_customers_tenant_email'),
+    )
+
+class Product(TenantMixin, Base):
     __tablename__ = 'products'
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
-    sku = Column(String(50), unique=True, nullable=False)
+    # Phase 12: urun kodu TENANT ICINDE tekil, global degil
+    sku = Column(String(50), nullable=False)
     price = Column(Numeric(18, 4), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     sales_items = relationship('SalesItem', back_populates='product')
 
-class Sale(Base):
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'sku', name='uq_products_tenant_sku'),
+    )
+
+class Sale(TenantMixin, Base):
     __tablename__ = 'sales'
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey('customers.id'), nullable=False)
@@ -43,7 +114,7 @@ class Sale(Base):
     customer = relationship('Customer', back_populates='sales')
     items = relationship('SalesItem', back_populates='sale', cascade='all, delete-orphan')
 
-class SalesItem(Base):
+class SalesItem(TenantMixin, Base):
     __tablename__ = 'sales_items'
     id = Column(Integer, primary_key=True)
     sale_id = Column(Integer, ForeignKey('sales.id'), nullable=False)
@@ -56,11 +127,12 @@ class SalesItem(Base):
     sale = relationship('Sale', back_populates='items')
     product = relationship('Product', back_populates='sales_items')
 
-class Invoice(Base):
+class Invoice(TenantMixin, Base):
     __tablename__ = 'invoices'
     id = Column(Integer, primary_key=True)
     sale_id = Column(Integer, ForeignKey('sales.id'), unique=True)
-    invoice_number = Column(String(50), unique=True)
+    # Phase 12: fatura numarasi tenant icinde tekil
+    invoice_number = Column(String(50))
     customer_id = Column(Integer, ForeignKey('customers.id'))
     issued_date = Column(Date)
     total_amount = Column(Numeric(18, 4))
@@ -74,12 +146,15 @@ class Invoice(Base):
     cancel_reason = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-class User(Base):
+class User(TenantMixin, Base):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True)
+    # E-posta GLOBAL tekil kalir: giris kimligi, tenant secilmeden once cozulur
     email = Column(String(255), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
     role = Column(String(20), nullable=False, default='sales')  # admin | sales
+    # Platform sahibi: tum tenant'lari yonetir, tenant filtresinden muaftir
+    is_superadmin = Column(Boolean, nullable=False, default=False)
     full_name = Column(String(255))
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -99,10 +174,10 @@ STOCK_REASONS = (
 STOCK_REF_TYPES = ('sale', 'purchase', 'transfer', 'adjustment', 'opening')
 
 
-class Warehouse(Base):
+class Warehouse(TenantMixin, Base):
     __tablename__ = 'warehouses'
     id = Column(Integer, primary_key=True)
-    code = Column(String(50), unique=True, nullable=False)
+    code = Column(String(50), nullable=False)
     name = Column(String(255), nullable=False)
     warehouse_type = Column(String(20), nullable=False, default='merkez')
     parent_id = Column(Integer, ForeignKey('warehouses.id'), nullable=True)
@@ -112,8 +187,12 @@ class Warehouse(Base):
 
     parent = relationship('Warehouse', remote_side=[id], backref='children')
 
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'code', name='uq_warehouses_tenant_code'),
+    )
 
-class StockLedgerEntry(Base):
+
+class StockLedgerEntry(TenantMixin, Base):
     """Degismez stok defteri satiri.
 
     Bu tablodaki satirlar ASLA UPDATE veya DELETE edilmez. Yanlis giris varsa
@@ -143,10 +222,11 @@ class StockLedgerEntry(Base):
     )
 
 
-class StockTransfer(Base):
+class StockTransfer(TenantMixin, Base):
     __tablename__ = 'stock_transfers'
     id = Column(Integer, primary_key=True)
-    transfer_no = Column(String(50), unique=True, nullable=False)
+    # Phase 12: transfer numarasi tenant icinde tekil
+    transfer_no = Column(String(50), nullable=True)
     from_warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=False)
     to_warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=False)
     transfer_date = Column(Date, nullable=False)
@@ -168,8 +248,12 @@ class StockTransfer(Base):
         'StockTransferItem', back_populates='transfer', cascade='all, delete-orphan'
     )
 
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'transfer_no', name='uq_transfers_tenant_number'),
+    )
 
-class StockTransferItem(Base):
+
+class StockTransferItem(TenantMixin, Base):
     __tablename__ = 'stock_transfer_items'
     id = Column(Integer, primary_key=True)
     transfer_id = Column(Integer, ForeignKey('stock_transfers.id'), nullable=False)
@@ -256,7 +340,7 @@ class NamingSeries(Base):
     )
 
 
-class AuditLog(Base):
+class AuditLog(TenantMixin, Base):
     """Kim, ne zaman, hangi alani nasil degistirdi.
 
     Satirlar degismezdir; yalnizca INSERT edilir.
@@ -281,3 +365,10 @@ class AuditLog(Base):
 
 class DocumentImmutableError(Exception):
     """Onaylanmis/iptal edilmis belge degistirilmeye calisildiginda firlatilir."""
+
+
+# Modeller tanimlandiktan SONRA session dinleyicilerini bagla.
+# (database.py icinde baglamak dairesel import olusturuyor.)
+from .database import register_session_listeners  # noqa: E402
+
+register_session_listeners()

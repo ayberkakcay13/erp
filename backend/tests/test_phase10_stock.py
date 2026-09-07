@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from app.database import SessionLocal, engine
 from app.models import LedgerImmutableError, StockLedgerEntry
-from app.services import stock_service
+from app.services import stock_service, tenant_context
 from tests.conftest import unique_suffix
 
 
@@ -323,36 +323,39 @@ def test_ayni_depoya_transfer_reddedilir(client, tracker):
 
 # ---------------- 6. Ledger degismezligi ----------------
 
-def test_ledger_satiri_update_edilemez(client, tracker):
+def test_ledger_satiri_update_edilemez(client, tracker, default_tenant_id):
     product = make_product(client, tracker, stock='10')
-    session = SessionLocal()
-    try:
-        entry = session.query(StockLedgerEntry).filter(
-            StockLedgerEntry.product_id == product['id']
-        ).first()
-        assert entry is not None
-        entry.change_qty = Decimal('999')
-        with pytest.raises(LedgerImmutableError):
-            session.flush()
-    finally:
-        session.rollback()
-        session.close()
+    # Dogrudan session kullaniliyor: RLS icin tenant baglamini biz kuruyoruz
+    with tenant_context.tenant_scope(default_tenant_id):
+        session = SessionLocal()
+        try:
+            entry = session.query(StockLedgerEntry).filter(
+                StockLedgerEntry.product_id == product['id']
+            ).first()
+            assert entry is not None
+            entry.change_qty = Decimal('999')
+            with pytest.raises(LedgerImmutableError):
+                session.flush()
+        finally:
+            session.rollback()
+            session.close()
 
 
-def test_ledger_satiri_delete_edilemez(client, tracker):
+def test_ledger_satiri_delete_edilemez(client, tracker, default_tenant_id):
     product = make_product(client, tracker, stock='10')
-    session = SessionLocal()
-    try:
-        entry = session.query(StockLedgerEntry).filter(
-            StockLedgerEntry.product_id == product['id']
-        ).first()
-        assert entry is not None
-        session.delete(entry)
-        with pytest.raises(LedgerImmutableError):
-            session.flush()
-    finally:
-        session.rollback()
-        session.close()
+    with tenant_context.tenant_scope(default_tenant_id):
+        session = SessionLocal()
+        try:
+            entry = session.query(StockLedgerEntry).filter(
+                StockLedgerEntry.product_id == product['id']
+            ).first()
+            assert entry is not None
+            session.delete(entry)
+            with pytest.raises(LedgerImmutableError):
+                session.flush()
+        finally:
+            session.rollback()
+            session.close()
 
 
 def test_duzeltme_ters_kayitla_yapilir(client, tracker):
@@ -385,7 +388,7 @@ def test_negatif_stoga_dusuren_duzeltme_reddedilir(client, tracker):
 
 # ---------------- 7. Es zamanlilik ----------------
 
-def test_es_zamanli_iki_satis_stogu_eksiye_dusurmez(client, tracker):
+def test_es_zamanli_iki_satis_stogu_eksiye_dusurmez(client, tracker, default_tenant_id):
     """Iki thread ayni anda son 1 adedi almaya calisir; biri hata almalidir.
 
     `stock_service.add_entry` urun satirini `SELECT ... FOR UPDATE` ile
@@ -399,20 +402,22 @@ def test_es_zamanli_iki_satis_stogu_eksiye_dusurmez(client, tracker):
     barrier = threading.Barrier(2)
 
     def take_one():
-        session = SessionLocal()
-        try:
-            barrier.wait(timeout=30)
-            stock_service.add_entry(
-                session, product_id, warehouse_id, Decimal('-1'), 'satis',
-                ref_type='sale', ref_id=None,
-            )
-            session.commit()
-            results.append('ok')
-        except Exception as exc:  # noqa: BLE001 - hangi hata oldugu onemli degil
-            session.rollback()
-            results.append(f'fail: {type(exc).__name__}')
-        finally:
-            session.close()
+        # contextvar'lar yeni thread'e devrolmaz; tenant baglami burada kurulur
+        with tenant_context.tenant_scope(default_tenant_id):
+            session = SessionLocal()
+            try:
+                barrier.wait(timeout=30)
+                stock_service.add_entry(
+                    session, product_id, warehouse_id, Decimal('-1'), 'satis',
+                    ref_type='sale', ref_id=None,
+                )
+                session.commit()
+                results.append('ok')
+            except Exception as exc:  # noqa: BLE001 - hangi hata oldugu onemli degil
+                session.rollback()
+                results.append(f'fail: {type(exc).__name__}')
+            finally:
+                session.close()
 
     threads = [threading.Thread(target=take_one) for _ in range(2)]
     for thread in threads:

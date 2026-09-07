@@ -121,7 +121,13 @@ def _check_document_deletable(obj) -> None:
 
 
 def _row(obj, action: str, field=None, old=None, new=None) -> dict:
+    from . import tenant_context  # gec import: dairesel bagimliligi kirar
+
+    # Log satirlari Core INSERT ile yaziliyor; ORM'in tenant damgalamasi
+    # buraya ulasmaz, tenant_id acikca doldurulur (audit_logs RLS altinda).
+    tenant_id = getattr(obj, 'tenant_id', None) or tenant_context.current_tenant_id.get()
     return {
+        'tenant_id': tenant_id,
         'table_name': obj.__tablename__,
         'record_id': getattr(obj, 'id', None),
         'action': action,

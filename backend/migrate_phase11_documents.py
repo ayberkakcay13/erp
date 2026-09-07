@@ -65,6 +65,12 @@ def main() -> None:
         print(f'  [{"OK " if name in tables else "EKSIK"}] {name}')
 
     with engine.begin() as conn:
+        # RLS acilmis olabilir (Phase 12); migration muafiyetle calisir
+        # 3. parametre true = SET LOCAL: ayar transaction ile sinirli kalir.
+        # false (oturum duzeyi) verilirse Supabase Transaction Pooler
+        # baglantiyi havuza geri verdiginde muafiyet sonraki kiraciya sizar.
+        conn.execute(text("SELECT set_config('app.bypass_rls', 'on', true)"))
+
         step(2, 'Belge yasam dongusu kolonlari')
         for table in DOCUMENT_TABLES:
             added = []
@@ -134,44 +140,69 @@ def main() -> None:
 
         step(6, 'Varsayilan numaralandirma serileri')
         year = date.today().year
-        for doc_type, (prefix, padding) in DEFAULT_SERIES.items():
-            existing = conn.execute(
-                text(
-                    'SELECT id, current_number FROM naming_series '
-                    'WHERE doc_type = :d AND year = :y AND tenant_id IS NULL'
-                ),
-                {'d': doc_type, 'y': year},
-            ).first()
-            if existing:
-                print(f'  {doc_type} ({prefix}-{year}): zaten var, sayac={existing[1]}')
-                continue
 
-            # Bu onekte kayitli numara varsa sayaci en yuksekten devam ettir
-            start = 0
-            if doc_type == 'invoice':
-                start = _max_existing(conn, 'invoices', 'invoice_number', prefix, year)
-            elif doc_type == 'transfer':
-                start = _max_existing(conn, 'stock_transfers', 'transfer_no', prefix, year)
+        # Phase 12 sonrasi seriler TENANT BAZLI. Tenant tablosu henuz yoksa
+        # (Phase 12'den once calistiriliyorsa) tek bir global seri acilir.
+        has_tenants = conn.execute(text(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_name = 'tenants' AND table_schema = 'public'"
+        )).first() is not None
+        if has_tenants:
+            tenant_ids = [r[0] for r in conn.execute(
+                text('SELECT id FROM tenants ORDER BY id'))]
+        else:
+            tenant_ids = []
+        targets = tenant_ids or [None]
 
-            conn.execute(
-                text(
-                    'INSERT INTO naming_series '
-                    '(doc_type, prefix, year, current_number, padding, tenant_id, created_at) '
-                    'VALUES (:d, :p, :y, :n, :pad, NULL, NOW())'
-                ),
-                {'d': doc_type, 'p': prefix, 'y': year, 'n': start, 'pad': padding},
-            )
-            print(f'  {doc_type} ({prefix}-{year}): olusturuldu, sayac={start}')
+        for tenant_id in targets:
+            for doc_type, (prefix, padding) in DEFAULT_SERIES.items():
+                existing = conn.execute(
+                    text(
+                        'SELECT id, current_number FROM naming_series '
+                        'WHERE doc_type = :d AND year = :y '
+                        '  AND tenant_id IS NOT DISTINCT FROM :t'
+                    ),
+                    {'d': doc_type, 'y': year, 't': tenant_id},
+                ).first()
+                label = f'{prefix}-{year}' + (f' / tenant {tenant_id}' if tenant_id else '')
+                if existing:
+                    print(f'  {doc_type} ({label}): zaten var, sayac={existing[1]}')
+                    continue
+
+                # Bu onekte kayitli numara varsa sayaci en yuksekten devam ettir
+                start = 0
+                if doc_type == 'invoice':
+                    start = _max_existing(conn, 'invoices', 'invoice_number',
+                                          prefix, year, tenant_id)
+                elif doc_type == 'transfer':
+                    start = _max_existing(conn, 'stock_transfers', 'transfer_no',
+                                          prefix, year, tenant_id)
+
+                conn.execute(
+                    text(
+                        'INSERT INTO naming_series '
+                        '(doc_type, prefix, year, current_number, padding, tenant_id, '
+                        ' created_at) '
+                        'VALUES (:d, :p, :y, :n, :pad, :t, NOW())'
+                    ),
+                    {'d': doc_type, 'p': prefix, 'y': year, 'n': start,
+                     'pad': padding, 't': tenant_id},
+                )
+                print(f'  {doc_type} ({label}): olusturuldu, sayac={start}')
 
     print('\nMigration tamamlandi.')
 
 
-def _max_existing(conn, table: str, column: str, prefix: str, year: int) -> int:
+def _max_existing(conn, table: str, column: str, prefix: str, year: int,
+                  tenant_id=None) -> int:
     """`PREFIX-YIL-NNNNN` bicimindeki mevcut numaralarin en buyugunu bulur."""
     pattern = f'{prefix}-{year}-%'
-    rows = conn.execute(
-        text(f'SELECT {column} FROM {table} WHERE {column} LIKE :p'), {'p': pattern}
-    ).all()
+    query = f'SELECT {column} FROM {table} WHERE {column} LIKE :p'
+    params = {'p': pattern}
+    if tenant_id is not None:
+        query += ' AND tenant_id = :t'
+        params['t'] = tenant_id
+    rows = conn.execute(text(query), params).all()
     highest = 0
     for (value,) in rows:
         match = re.fullmatch(rf'{re.escape(prefix)}-{year}-(\d+)', value or '')

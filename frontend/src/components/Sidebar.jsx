@@ -1,22 +1,29 @@
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
+// Phase 12: `module` alani olan baglantilar, o modul kapaliysa menude cikmaz
 const links = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/customers', label: 'Musteriler' },
   { to: '/products', label: 'Urunler' },
-  { to: '/sales', label: 'Satislar' },
-  { to: '/invoices', label: 'Faturalar' },
-  { to: '/stock', label: 'Stok Durumu', end: true },
-  { to: '/stock/ledger', label: 'Stok Hareketleri' },
-  { to: '/transfers', label: 'Transferler' },
+  { to: '/sales', label: 'Satislar', module: 'sales' },
+  { to: '/invoices', label: 'Faturalar', module: 'invoice' },
+  { to: '/stock', label: 'Stok Durumu', end: true, module: 'stock' },
+  { to: '/stock/ledger', label: 'Stok Hareketleri', module: 'stock' },
+  { to: '/transfers', label: 'Transferler', module: 'stock' },
   { to: '/users', label: 'Kullanicilar', adminOnly: true },
   { to: '/audit-log', label: 'Denetim Izi', adminOnly: true },
+  { to: '/tenants', label: 'Firmalar', superadminOnly: true },
 ];
 
 export default function Sidebar() {
-  const { isAdmin } = useAuth();
-  const visible = links.filter((link) => !link.adminOnly || isAdmin);
+  const { isAdmin, isSuperadmin, hasModule } = useAuth();
+  const visible = links.filter(
+    (link) =>
+      (!link.adminOnly || isAdmin)
+      && (!link.superadminOnly || isSuperadmin)
+      && (!link.module || hasModule(link.module))
+  );
 
   return (
     <aside className="w-28 sm:w-44 md:w-56 bg-indigo-900 text-indigo-100 shrink-0 p-2 sm:p-4">

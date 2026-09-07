@@ -368,3 +368,50 @@ class AuditLogResponse(BaseModel):
     user_email: Optional[str] = None
     ip_address: Optional[str] = None
     created_at: Optional[datetime] = None
+
+
+# ---------------- Phase 12: Cok kiracili mimari ----------------
+
+class TenantModuleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    module_code: str
+    is_enabled: bool
+
+
+class TenantBase(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    slug: str = Field(min_length=2, max_length=63, pattern='^[a-z0-9][a-z0-9-]*$')
+    tax_number: Optional[str] = Field(default=None, max_length=20)
+    plan: str = Field(default='free', pattern='^(free|basic|pro)$')
+
+
+class TenantCreate(TenantBase):
+    """Yeni firma acar. Yonetici bilgisi verilirse ilk admin de olusturulur."""
+    modules: Optional[List[str]] = None
+    admin_email: Optional[EmailStr] = None
+    admin_password: Optional[str] = Field(default=None, min_length=6, max_length=128)
+    admin_full_name: Optional[str] = Field(default=None, max_length=255)
+
+
+class TenantUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    slug: Optional[str] = Field(default=None, min_length=2, max_length=63,
+                                pattern='^[a-z0-9][a-z0-9-]*$')
+    tax_number: Optional[str] = Field(default=None, max_length=20)
+    plan: Optional[str] = Field(default=None, pattern='^(free|basic|pro)$')
+    is_active: Optional[bool] = None
+
+
+class TenantModuleUpdate(BaseModel):
+    """Gonderilen liste ACIK modullerdir; listede olmayanlar kapatilir."""
+    modules: List[str] = Field(default_factory=list)
+
+
+class TenantResponse(TenantBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+    modules: List[TenantModuleResponse] = []

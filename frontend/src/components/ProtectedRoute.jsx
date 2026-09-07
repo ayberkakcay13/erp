@@ -5,9 +5,15 @@ import { Loading } from './ui';
 /**
  * Giris yapmamis kullaniciyi /login'e yollar.
  * adminOnly verilirse sales rolundeki kullanici da giremez.
+ * superadminOnly (Phase 12) platform sahibine ozel sayfalar icindir -
+ * firma yoneticisi bunlara erisemez.
  */
-export default function ProtectedRoute({ children, adminOnly = false }) {
-  const { token, user, loading, isAdmin } = useAuth();
+export default function ProtectedRoute({
+  children,
+  adminOnly = false,
+  superadminOnly = false,
+}) {
+  const { token, user, loading, isAdmin, isSuperadmin } = useAuth();
   const location = useLocation();
 
   // Saklanan token dogrulanana kadar bekle, yoksa bir an login ekrani gorunur
@@ -15,6 +21,17 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
 
   if (!token || !user) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
+
+  if (superadminOnly && !isSuperadmin) {
+    return (
+      <div data-testid="forbidden" className="bg-white border border-gray-200 rounded p-6">
+        <h2 className="text-lg font-semibold text-gray-800 mb-1">Bu sayfaya erisemezsin</h2>
+        <p className="text-sm text-gray-600">
+          Bu bolum platform yoneticisine ozeldir.
+        </p>
+      </div>
+    );
   }
 
   if (adminOnly && !isAdmin) {

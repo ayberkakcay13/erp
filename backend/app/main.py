@@ -3,13 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
-from .auth import user_id_from_token
+from .auth import claims_from_token
 from .database import test_connection
 from .models import DocumentImmutableError, LedgerImmutableError
-from .services import audit_service
+from .services import audit_service, tenant_context
 from .routers import (
     audit, auth, customers, invoices, naming_series, products, reports, sales,
-    stock, transfers, users, warehouses,
+    stock, tenants, transfers, users, warehouses,
 )
 
 app = FastAPI(
@@ -39,6 +39,8 @@ app.include_router(stock.router)
 app.include_router(transfers.router)
 app.include_router(naming_series.router)
 app.include_router(audit.router)
+app.include_router(tenants.router)
+app.include_router(tenants.me_router)
 
 
 @app.middleware('http')
@@ -48,11 +50,21 @@ async def audit_context(request: Request, call_next):
         request.client.host if request.client else None
     )
     audit_service.current_ip.set(client)
-    # Kullanici token'dan cozulur: get_current_user senkron oldugu icin
-    # threadpool'da kopyalanmis bir contextvar'a yazardi, buraya ulasmazdi.
-    audit_service.current_user_id.set(
-        user_id_from_token(request.headers.get('authorization'))
-    )
+
+    # Kullanici ve tenant token'dan cozulur: get_current_user senkron oldugu
+    # icin threadpool'da kopyalanmis bir contextvar'a yazardi, buraya ulasmazdi.
+    claims = claims_from_token(request.headers.get('authorization'))
+    try:
+        user_id = int(claims['sub'])
+    except (KeyError, TypeError, ValueError):
+        user_id = None
+    audit_service.current_user_id.set(user_id)
+
+    # Phase 12: RLS politikalari bu iki degeri okur. Token yoksa tenant da
+    # yoktur ve RLS varsayilan olarak HICBIR satiri dondurmez.
+    tenant_context.current_tenant_id.set(claims.get('tenant_id'))
+    tenant_context.bypass_rls.set(bool(claims.get('is_superadmin')))
+
     return await call_next(request)
 
 

@@ -6,10 +6,15 @@ teardown'da HEPSI silinir - production tablolarinda test verisi kalmaz.
 
 Ledger satirlari ORM uzerinden silinemez (degismezlik kurali). Temizlik
 bilerek ham SQL ile yapilir; bu sadece test temizligine ozgudur.
+
+Phase 12: tablolar RLS + FORCE ROW LEVEL SECURITY altinda. Ham SQL ile
+calisan kurulum/temizlik baglantilari `app.bypass_rls` ayarini acikca
+acmak zorunda - aksi halde DELETE hicbir satira dokunmaz.
 """
 import sys
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -41,6 +46,17 @@ CLEANUP_ORDER = [
 ]
 
 
+@contextmanager
+def admin_connection():
+    """RLS muafiyetli ham SQL baglantisi (yalnizca test kurulumu/temizligi)."""
+    with engine.begin() as conn:
+        # 3. parametre true = SET LOCAL: ayar transaction ile sinirli kalir.
+        # false (oturum duzeyi) verilirse Supabase Transaction Pooler
+        # baglantiyi havuza geri verdiginde muafiyet sonraki kiraciya sizar.
+        conn.execute(text("SELECT set_config('app.bypass_rls', 'on', true)"))
+        yield conn
+
+
 def unique_suffix() -> str:
     """Testler paralel/tekrarli kosarken cakismayan benzersiz ek."""
     return f'{int(time.time())}-{uuid.uuid4().hex[:6]}'
@@ -56,7 +72,10 @@ def admin_user():
     """
     from app.auth import hash_password
 
-    with engine.begin() as conn:
+    with admin_connection() as conn:
+        tenant_id = conn.execute(
+            text("SELECT id FROM tenants WHERE slug = 'varsayilan'")
+        ).scalar()
         existing = conn.execute(
             text('SELECT id FROM users WHERE email = :e'), {'e': TEST_ADMIN_EMAIL}
         ).first()
@@ -65,26 +84,33 @@ def admin_user():
             created_here = False
             conn.execute(
                 text(
-                    'UPDATE users SET hashed_password = :p, role = :r, is_active = TRUE '
-                    'WHERE id = :i'
+                    'UPDATE users SET hashed_password = :p, role = :r, is_active = TRUE, '
+                    'tenant_id = :t, is_superadmin = FALSE WHERE id = :i'
                 ),
-                {'p': hash_password(TEST_ADMIN_PASSWORD), 'r': 'admin', 'i': user_id},
+                {
+                    'p': hash_password(TEST_ADMIN_PASSWORD), 'r': 'admin',
+                    't': tenant_id, 'i': user_id,
+                },
             )
         else:
             user_id = conn.execute(
                 text(
                     'INSERT INTO users (email, hashed_password, role, full_name, '
-                    'is_active, created_at) '
-                    "VALUES (:e, :p, 'admin', 'Pytest Admin', TRUE, NOW()) RETURNING id"
+                    'is_active, tenant_id, is_superadmin, created_at) '
+                    "VALUES (:e, :p, 'admin', 'Pytest Admin', TRUE, :t, FALSE, NOW()) "
+                    'RETURNING id'
                 ),
-                {'e': TEST_ADMIN_EMAIL, 'p': hash_password(TEST_ADMIN_PASSWORD)},
+                {
+                    'e': TEST_ADMIN_EMAIL, 'p': hash_password(TEST_ADMIN_PASSWORD),
+                    't': tenant_id,
+                },
             ).scalar()
             created_here = True
 
-    yield user_id
+    yield {'user_id': user_id, 'tenant_id': tenant_id}
 
     if created_here:
-        with engine.begin() as conn:
+        with admin_connection() as conn:
             # Test kayitlari temizlendikten sonra kullaniciya bagli iz kalmamali
             conn.execute(
                 text('UPDATE stock_ledger_entries SET created_by = NULL '
@@ -105,6 +131,12 @@ def admin_user():
                 text('DELETE FROM audit_logs WHERE user_id = :i'), {'i': user_id}
             )
             conn.execute(text('DELETE FROM users WHERE id = :i'), {'i': user_id})
+
+
+@pytest.fixture(scope='session')
+def default_tenant_id(admin_user) -> int:
+    """Testlerin uzerinde calistigi varsayilan tenant."""
+    return admin_user['tenant_id']
 
 
 @pytest.fixture(scope='session')
@@ -142,7 +174,7 @@ class Tracker:
             self.add(table, row_id)
 
     def cleanup(self) -> None:
-        with engine.begin() as conn:
+        with admin_connection() as conn:
             # Once takip edilen belgelere bagli tum yan kayitlari topla
             for sale_id in self._rows.get('sales', set()):
                 for row in conn.execute(

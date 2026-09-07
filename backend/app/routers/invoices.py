@@ -14,10 +14,11 @@ from ..schemas import (
     CancelRequest, InvoiceCreate, InvoiceResponse, InvoiceStatusUpdate,
 )
 from ..services import document_service
+from ..services.tenant_service import require_module
 
 router = APIRouter(
     tags=['invoices'],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(get_current_user), Depends(require_module('invoice'))],
 )
 
 

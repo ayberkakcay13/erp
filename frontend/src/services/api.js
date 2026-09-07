@@ -193,6 +193,20 @@ export const namingSeriesAPI = {
   update: (id, data) => unwrap(api.put(`/api/naming-series/${id}`, data)),
 };
 
+// ---------------- Phase 12: cok kiracili mimari ----------------
+
+export const tenantAPI = {
+  // Kullanicinin kendi firmasi
+  me: () => unwrap(api.get('/api/tenant')),
+  myModules: () => unwrap(api.get('/api/tenant/modules')),
+  // Platform sahibi (superadmin)
+  getAll: () => unwrap(api.get('/api/tenants')),
+  getById: (id) => unwrap(api.get(`/api/tenants/${id}`)),
+  create: (data) => unwrap(api.post('/api/tenants', data)),
+  update: (id, data) => unwrap(api.put(`/api/tenants/${id}`, data)),
+  setModules: (id, modules) => unwrap(api.put(`/api/tenants/${id}/modules`, { modules })),
+};
+
 export const userAPI = {
   getAll: () => unwrap(api.get('/api/users')),
   create: (data) => unwrap(api.post('/api/auth/register', data)),

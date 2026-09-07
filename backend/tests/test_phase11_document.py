@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from app.database import SessionLocal, engine
 from app.models import DocStatus
-from app.services import naming_service
+from app.services import naming_service, tenant_context
 from tests.conftest import unique_suffix
 from tests.test_phase10_stock import (
     make_customer,
@@ -95,27 +95,28 @@ def test_status_ve_docstatus_bagimsiz(client, tracker):
 
 # ---------------- 2. Degismezlik kurallari ----------------
 
-def test_taslak_kayit_duzenlenebilir(client, tracker):
+def test_taslak_kayit_duzenlenebilir(client, tracker, default_tenant_id):
     customer = make_customer(client, tracker)
     product = make_product(client, tracker, stock='10')
     sale = make_draft_sale(client, tracker, customer['id'], [
         {'product_id': product['id'], 'quantity': 2, 'unit_price': '10.00'},
     ])
 
-    session = SessionLocal()
-    try:
-        from app.models import Sale
+    with tenant_context.tenant_scope(default_tenant_id):
+        session = SessionLocal()
+        try:
+            from app.models import Sale
 
-        record = session.get(Sale, sale['id'])
-        record.total_amount = Decimal('99.00')
-        session.commit()  # taslak: serbestce degisir
-        session.refresh(record)
-        assert record.total_amount == Decimal('99.0000')
-    finally:
-        session.close()
+            record = session.get(Sale, sale['id'])
+            record.total_amount = Decimal('99.00')
+            session.commit()  # taslak: serbestce degisir
+            session.refresh(record)
+            assert record.total_amount == Decimal('99.0000')
+        finally:
+            session.close()
 
 
-def test_onayli_kayit_update_denemesi_reddedilir(client, tracker):
+def test_onayli_kayit_update_denemesi_reddedilir(client, tracker, default_tenant_id):
     """Onayli belgede is alani degistirilemez - kural event listener'da."""
     customer = make_customer(client, tracker)
     product = make_product(client, tracker, stock='10')
@@ -123,20 +124,21 @@ def test_onayli_kayit_update_denemesi_reddedilir(client, tracker):
         {'product_id': product['id'], 'quantity': 2, 'unit_price': '10.00'},
     ]).json()
 
-    session = SessionLocal()
-    try:
-        from app.models import DocumentImmutableError, Sale
-
-        record = session.get(Sale, sale['id'])
-        record.total_amount = Decimal('1.00')
+    with tenant_context.tenant_scope(default_tenant_id):
+        session = SessionLocal()
         try:
-            session.commit()
-            raise AssertionError('Onayli belge degistirilebildi')
-        except DocumentImmutableError as exc:
-            assert 'degistirilemez' in str(exc)
-    finally:
-        session.rollback()
-        session.close()
+            from app.models import DocumentImmutableError, Sale
+
+            record = session.get(Sale, sale['id'])
+            record.total_amount = Decimal('1.00')
+            try:
+                session.commit()
+                raise AssertionError('Onayli belge degistirilebildi')
+            except DocumentImmutableError as exc:
+                assert 'degistirilemez' in str(exc)
+        finally:
+            session.rollback()
+            session.close()
 
 
 def test_onayli_kayit_delete_denemesi_400(client, tracker):
@@ -253,7 +255,7 @@ def test_fatura_numarasi_seri_formatinda(client, tracker):
     assert Decimal(str(invoice['total_amount'])) == Decimal('120.00')
 
 
-def test_taslak_fatura_numara_tuketmez(client, tracker):
+def test_taslak_fatura_numara_tuketmez(client, tracker, default_tenant_id):
     """Numara ONAY aninda atanir; silinen taslak seride bosluk birakmaz."""
     customer = make_customer(client, tracker)
     product = make_product(client, tracker, stock='10')
@@ -265,9 +267,9 @@ def test_taslak_fatura_numara_tuketmez(client, tracker):
     assert invoice['docstatus'] == DocStatus.DRAFT
     assert invoice['invoice_number'] is None
 
-    before = _series_counter('invoice')
+    before = _series_counter('invoice', default_tenant_id)
     assert client.delete(f'/api/invoices/{invoice["id"]}').status_code == 204
-    assert _series_counter('invoice') == before  # sayac tuketilmedi
+    assert _series_counter('invoice', default_tenant_id) == before  # tuketilmedi
 
 
 def test_numaralar_ardisik_ve_atlamasiz(client, tracker):
@@ -285,28 +287,32 @@ def test_numaralar_ardisik_ve_atlamasiz(client, tracker):
     assert sequence == list(range(sequence[0], sequence[0] + 3)), sequence
 
 
-def test_es_zamanli_numara_isteklerinde_tekrar_yok(client, tracker):
+def test_es_zamanli_numara_isteklerinde_tekrar_yok(client, tracker, default_tenant_id):
     """100 es zamanli istek: hicbir numara tekrar etmemeli, atlama olmamali."""
     results = []
     lock = threading.Lock()
     barrier = threading.Barrier(20)
 
     def take_numbers():
-        session = SessionLocal()
-        try:
-            barrier.wait(timeout=60)
-            batch = [
-                naming_service.get_next_number(session, 'delivery_note')
-                for _ in range(5)
-            ]
-            session.commit()
-            with lock:
-                results.extend(batch)
-        except Exception:  # noqa: BLE001
-            session.rollback()
-            raise
-        finally:
-            session.close()
+        # Seriler tenant bazli; her thread kendi baglamini kurar
+        with tenant_context.tenant_scope(default_tenant_id):
+            session = SessionLocal()
+            try:
+                barrier.wait(timeout=60)
+                batch = [
+                    naming_service.get_next_number(
+                        session, 'delivery_note', tenant_id=default_tenant_id
+                    )
+                    for _ in range(5)
+                ]
+                session.commit()
+                with lock:
+                    results.extend(batch)
+            except Exception:  # noqa: BLE001
+                session.rollback()
+                raise
+            finally:
+                session.close()
 
     threads = [threading.Thread(target=take_numbers) for _ in range(20)]
     for thread in threads:
@@ -321,32 +327,37 @@ def test_es_zamanli_numara_isteklerinde_tekrar_yok(client, tracker):
     assert sequence == list(range(sequence[0], sequence[0] + 100)), 'seride atlama var'
 
 
-def test_yil_degisiminde_sayac_sifirlanir(client, tracker):
+def test_yil_degisiminde_sayac_sifirlanir(client, tracker, default_tenant_id):
     """Gelecek yil icin seri acildiginda sayac sifirdan baslar."""
-    session = SessionLocal()
-    try:
-        future = 2099
-        number = naming_service.get_next_number(session, 'delivery_note', year=future)
-        session.commit()
-        assert number == f'IR-{future}-00001', number
-    finally:
-        session.close()
-        with engine.begin() as conn:
-            conn.execute(
-                text('DELETE FROM naming_series WHERE year = :y'), {'y': 2099}
+    from tests.conftest import admin_connection
+
+    with tenant_context.tenant_scope(default_tenant_id):
+        session = SessionLocal()
+        try:
+            future = 2099
+            number = naming_service.get_next_number(
+                session, 'delivery_note', year=future, tenant_id=default_tenant_id
             )
+            session.commit()
+            assert number == f'IR-{future}-00001', number
+        finally:
+            session.close()
+    with admin_connection() as conn:
+        conn.execute(text('DELETE FROM naming_series WHERE year = :y'), {'y': 2099})
 
 
-def _series_counter(doc_type: str) -> int:
+def _series_counter(doc_type: str, tenant_id: int) -> int:
     from datetime import date
 
-    with engine.connect() as conn:
+    from tests.conftest import admin_connection
+
+    with admin_connection() as conn:
         return conn.execute(
             text(
                 'SELECT current_number FROM naming_series '
-                'WHERE doc_type = :d AND year = :y AND tenant_id IS NULL'
+                'WHERE doc_type = :d AND year = :y AND tenant_id = :t'
             ),
-            {'d': doc_type, 'y': date.today().year},
+            {'d': doc_type, 'y': date.today().year, 't': tenant_id},
         ).scalar() or 0
 
 
@@ -450,7 +461,9 @@ def test_audit_log_sadece_admin(client, tracker, admin_token):
         )
         assert response.status_code == 403, response.text
     finally:
-        with engine.begin() as conn:
+        from tests.conftest import admin_connection
+
+        with admin_connection() as conn:
             conn.execute(
                 text('DELETE FROM audit_logs WHERE user_id = :i'), {'i': user_id}
             )

@@ -13,6 +13,7 @@ import Login from './pages/Login';
 import Products from './pages/Products';
 import SaleDetail from './pages/SaleDetail';
 import Sales from './pages/Sales';
+import Tenants from './pages/Tenants';
 import StockBalance from './pages/StockBalance';
 import StockLedger from './pages/StockLedger';
 import Transfers from './pages/Transfers';
@@ -34,9 +35,9 @@ function AppLayout({ children }) {
 }
 
 /** Korumali sayfalari tek yerde sarmalar. */
-function Protected({ children, adminOnly = false }) {
+function Protected({ children, adminOnly = false, superadminOnly = false }) {
   return (
-    <ProtectedRoute adminOnly={adminOnly}>
+    <ProtectedRoute adminOnly={adminOnly} superadminOnly={superadminOnly}>
       <AppLayout>{children}</AppLayout>
     </ProtectedRoute>
   );
@@ -62,6 +63,10 @@ export default function App() {
           <Route
             path="/audit-log"
             element={<Protected adminOnly><AuditLog /></Protected>}
+          />
+          <Route
+            path="/tenants"
+            element={<Protected superadminOnly><Tenants /></Protected>}
           />
           <Route
             path="*"

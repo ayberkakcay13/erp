@@ -19,14 +19,21 @@ engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Phase 11: denetim izi + belge degismezligi dinleyicileri tum session'lara baglanir
-def _register_audit_listeners() -> None:
-    from .services import audit_service  # gec import: dairesel bagimliligi kirar
+# Phase 11/12 dinleyicileri models.py'nin SONUNDA baglanir: burada baglamak
+# dairesel import olusturuyor (database -> services -> models -> database).
+_listeners_registered = False
+
+
+def register_session_listeners() -> None:
+    """Denetim izi, belge degismezligi ve tenant baglami dinleyicilerini baglar."""
+    global _listeners_registered
+    if _listeners_registered:
+        return
+    from .services import audit_service, tenant_context
 
     audit_service.register(SessionLocal)
-
-
-_register_audit_listeners()
+    tenant_context.register(SessionLocal)
+    _listeners_registered = True
 
 
 def get_db():

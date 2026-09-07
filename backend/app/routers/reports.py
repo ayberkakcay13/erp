@@ -14,11 +14,12 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import Customer, Invoice, Product, Sale, SalesItem
 from ..services import stock_service
+from ..services.tenant_service import require_module
 
 router = APIRouter(
     prefix='/api/reports',
     tags=['reports'],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(get_current_user), Depends(require_module('reports'))],
 )
 
 # Uyarilar ayni dosyada ama farkli bir URL onekinde durdugu icin ikinci bir router
