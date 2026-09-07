@@ -28,6 +28,11 @@ def call(method, path, body=None, token='default'):
         return e.code, (json.loads(raw) if raw else None)
 
 
+def num(value):
+    """Phase 10: para/miktar alanlari Decimal oldugu icin JSON'da string gelir."""
+    return float(value if value is not None else 0)
+
+
 def check(label, cond, detail=''):
     print(('  OK   ' if cond else '  FAIL ') + label + (f'  [{detail}]' if detail else ''))
     if not cond:
@@ -87,18 +92,18 @@ code, sale = call('POST', '/api/sales', {
     ]})
 check('POST /api/sales -> 201', code == 201, f'HTTP {code}')
 expected = 4 * 450.0 + 2 * 1250.0
-check(f'total_amount == {expected}', abs(sale['total_amount'] - expected) < 0.01,
+check(f'total_amount == {expected}', abs(num(sale['total_amount']) - expected) < 0.01,
       f"gelen: {sale['total_amount']}")
 sid = sale['id']
 print(f'   sale_id = {sid}')
 
 print('\n3b. Stok otomatik dustu mu?')
 code, p0 = call('GET', f'/api/products/{pids[0]}')
-check('Mouse stok 100 -> 96', p0['stock'] == 96, f"gelen: {p0['stock']}")
+check('Mouse stok 100 -> 96', num(p0['stock']) == 96, f"gelen: {p0['stock']}")
 code, p1 = call('GET', f'/api/products/{pids[1]}')
-check('Kulaklik stok 40 -> 38', p1['stock'] == 38, f"gelen: {p1['stock']}")
+check('Kulaklik stok 40 -> 38', num(p1['stock']) == 38, f"gelen: {p1['stock']}")
 code, p2 = call('GET', f'/api/products/{pids[2]}')
-check('Webcam stok degismedi (25)', p2['stock'] == 25, f"gelen: {p2['stock']}")
+check('Webcam stok degismedi (25)', num(p2['stock']) == 25, f"gelen: {p2['stock']}")
 
 print('\n3c. Yetersiz stokta satis reddediliyor mu?')
 code, err = call('POST', '/api/sales', {'customer_id': cid, 'items': [
@@ -107,7 +112,7 @@ check('stoktan fazla miktar -> 400', code == 400, f'HTTP {code}')
 check('hata mesaji stok yetersiz diyor',
       'stok yetersiz' in str(err.get('detail', '')), str(err.get('detail'))[:60])
 code, p2b = call('GET', f'/api/products/{pids[2]}')
-check('reddedilen satista stok degismedi', p2b['stock'] == 25, f"gelen: {p2b['stock']}")
+check('reddedilen satista stok degismedi', num(p2b['stock']) == 25, f"gelen: {p2b['stock']}")
 
 print('\n4. Sale bilgisini GET ile cek (detayli response)')
 code, got = call('GET', f'/api/sales/{sid}')
@@ -119,12 +124,13 @@ check('item urun isimleri dolu', all(i['product_name'] for i in got['items']),
       ', '.join(str(i['product_name']) for i in got['items']))
 check('item SKU\'lari dolu', all(i['product_sku'] for i in got['items']))
 check('satir toplamlari dogru',
-      all(abs(i['total_price'] - i['quantity'] * i['unit_price']) < 0.01 for i in got['items']))
+      all(abs(num(i['total_price']) - num(i['quantity']) * num(i['unit_price'])) < 0.01
+          for i in got['items']))
 
 print('\n5. Invoice olustur (KDV %20)')
 code, inv = call('POST', f'/api/sales/{sid}/invoice', {'tax_rate': 0.20})
 check('POST /api/sales/{id}/invoice -> 201', code == 201, f'HTTP {code}')
-check('total_amount KDV dahil', abs(inv['total_amount'] - round(expected * 1.2, 2)) < 0.01,
+check('total_amount KDV dahil', abs(num(inv['total_amount']) - round(expected * 1.2, 2)) < 0.01,
       f"{inv['total_amount']} (beklenen {round(expected * 1.2, 2)})")
 check('invoice_number uretildi', str(inv['invoice_number']).startswith(f'INV-{sid}-'),
       inv['invoice_number'])
@@ -150,33 +156,33 @@ code, cancelled = call('PUT', f'/api/sales/{sid}', {'status': 'cancelled'})
 check('PUT status=cancelled -> 200', code == 200, f'HTTP {code}')
 check('status cancelled', cancelled['status'] == 'cancelled', cancelled['status'])
 code, p0c = call('GET', f'/api/products/{pids[0]}')
-check('Mouse stok 96 -> 100 (geri eklendi)', p0c['stock'] == 100, f"gelen: {p0c['stock']}")
+check('Mouse stok 96 -> 100 (geri eklendi)', num(p0c['stock']) == 100, f"gelen: {p0c['stock']}")
 code, p1c = call('GET', f'/api/products/{pids[1]}')
-check('Kulaklik stok 38 -> 40 (geri eklendi)', p1c['stock'] == 40, f"gelen: {p1c['stock']}")
+check('Kulaklik stok 38 -> 40 (geri eklendi)', num(p1c['stock']) == 40, f"gelen: {p1c['stock']}")
 
 print('\n8b. Tekrar cancelled denendiginde stok ikinci kez eklenmemeli (idempotent)')
 call('PUT', f'/api/sales/{sid}', {'status': 'cancelled'})
 call('PUT', f'/api/sales/{sid}', {'status': 'cancelled'})
 code, p0d = call('GET', f'/api/products/{pids[0]}')
-check('Mouse stok hala 100', p0d['stock'] == 100, f"gelen: {p0d['stock']}")
+check('Mouse stok hala 100', num(p0d['stock']) == 100, f"gelen: {p0d['stock']}")
 code, p1d = call('GET', f'/api/products/{pids[1]}')
-check('Kulaklik stok hala 40', p1d['stock'] == 40, f"gelen: {p1d['stock']}")
+check('Kulaklik stok hala 40', num(p1d['stock']) == 40, f"gelen: {p1d['stock']}")
 
 print('\n8c. Iptal geri alinirsa stok yeniden dusuluyor mu?')
 code, back = call('PUT', f'/api/sales/{sid}', {'status': 'completed'})
 check('PUT status=completed -> 200', code == 200, f'HTTP {code}')
 code, p0e = call('GET', f'/api/products/{pids[0]}')
-check('Mouse stok 100 -> 96 (yeniden dusuldu)', p0e['stock'] == 96, f"gelen: {p0e['stock']}")
+check('Mouse stok 100 -> 96 (yeniden dusuldu)', num(p0e['stock']) == 96, f"gelen: {p0e['stock']}")
 code, p1e = call('GET', f'/api/products/{pids[1]}')
-check('Kulaklik stok 40 -> 38 (yeniden dusuldu)', p1e['stock'] == 38, f"gelen: {p1e['stock']}")
+check('Kulaklik stok 40 -> 38 (yeniden dusuldu)', num(p1e['stock']) == 38, f"gelen: {p1e['stock']}")
 
 print('\n8d. pending <-> completed gecisi stogu etkilemiyor')
 call('PUT', f'/api/sales/{sid}', {'status': 'pending'})
 code, p0f = call('GET', f'/api/products/{pids[0]}')
-check('Mouse stok hala 96', p0f['stock'] == 96, f"gelen: {p0f['stock']}")
+check('Mouse stok hala 96', num(p0f['stock']) == 96, f"gelen: {p0f['stock']}")
 call('PUT', f'/api/sales/{sid}', {'status': 'completed'})
 code, p0g = call('GET', f'/api/products/{pids[0]}')
-check('Mouse stok hala 96', p0g['stock'] == 96, f"gelen: {p0g['stock']}")
+check('Mouse stok hala 96', num(p0g['stock']) == 96, f"gelen: {p0g['stock']}")
 
 print('\nBONUS: hatali istekler')
 code, _ = call('POST', f'/api/sales/{sid}/invoice', {})
@@ -186,6 +192,34 @@ check('olmayan sale -> 404', code == 404, f'HTTP {code}')
 code, _ = call('POST', '/api/sales', {'customer_id': 999999, 'items': [
     {'product_id': pids[0], 'quantity': 1, 'unit_price': 1}]})
 check('olmayan customer ile sale -> 404', code == 404, f'HTTP {code}')
+
+print('\n9. Temizlik (production tablolarinda test verisi birakma)')
+# Ledger satirlari ORM uzerinden silinemez (Phase 10 degismezlik kurali);
+# temizlik bilerek ham SQL ile yapilir, sadece bu kosuda olusan kayitlari siler.
+try:
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from sqlalchemy import text
+
+    from app.database import engine
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            'DELETE FROM invoices WHERE sale_id IN '
+            '(SELECT id FROM sales WHERE customer_id = :c)'), {'c': cid})
+        conn.execute(text(
+            'DELETE FROM sales_items WHERE sale_id IN '
+            '(SELECT id FROM sales WHERE customer_id = :c)'), {'c': cid})
+        conn.execute(text(
+            'DELETE FROM stock_ledger_entries WHERE product_id = ANY(:p)'), {'p': pids})
+        conn.execute(text('DELETE FROM sales WHERE customer_id = :c'), {'c': cid})
+        conn.execute(text('DELETE FROM products WHERE id = ANY(:p)'), {'p': pids})
+        conn.execute(text('DELETE FROM customers WHERE id = :c'), {'c': cid})
+    check('test kayitlari silindi', True)
+except Exception as exc:  # noqa: BLE001
+    check('test kayitlari silindi', False, str(exc))
 
 print('\n' + '=' * 55)
 if failures:

@@ -1,4 +1,8 @@
-﻿from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime, ForeignKey, Date
+from sqlalchemy import (
+    Boolean, Column, Date, DateTime, ForeignKey, Index, Integer,
+    Numeric, String, Text,
+)
+from sqlalchemy import event
 from sqlalchemy.orm import relationship
 from .database import Base
 from datetime import datetime
@@ -17,8 +21,7 @@ class Product(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
     sku = Column(String(50), unique=True, nullable=False)
-    price = Column(Float, nullable=False)
-    stock = Column(Integer, default=0)
+    price = Column(Numeric(18, 4), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     sales_items = relationship('SalesItem', back_populates='product')
 
@@ -27,7 +30,7 @@ class Sale(Base):
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey('customers.id'), nullable=False)
     sale_date = Column(Date, nullable=False)
-    total_amount = Column(Float, nullable=False)
+    total_amount = Column(Numeric(18, 4), nullable=False)
     status = Column(String(20), default='pending')
     created_at = Column(DateTime, default=datetime.utcnow)
     customer = relationship('Customer', back_populates='sales')
@@ -38,9 +41,11 @@ class SalesItem(Base):
     id = Column(Integer, primary_key=True)
     sale_id = Column(Integer, ForeignKey('sales.id'), nullable=False)
     product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
-    quantity = Column(Integer, nullable=False)
-    unit_price = Column(Float, nullable=False)
-    total_price = Column(Float, nullable=False)
+    quantity = Column(Numeric(18, 4), nullable=False)
+    unit_price = Column(Numeric(18, 4), nullable=False)
+    total_price = Column(Numeric(18, 4), nullable=False)
+    # Phase 10: satis kalemi hangi depodan cikti (bossa varsayilan depo)
+    warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=True)
     sale = relationship('Sale', back_populates='items')
     product = relationship('Product', back_populates='sales_items')
 
@@ -51,7 +56,7 @@ class Invoice(Base):
     invoice_number = Column(String(50), unique=True)
     customer_id = Column(Integer, ForeignKey('customers.id'))
     issued_date = Column(Date)
-    total_amount = Column(Float)
+    total_amount = Column(Numeric(18, 4))
     status = Column(String(20), default='draft')
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -64,3 +69,113 @@ class User(Base):
     full_name = Column(String(255))
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ---------------- Phase 10: Depo ve Stok Defteri ----------------
+# Miktar alanlarinda Numeric(18, 4) kullaniliyor; float yuvarlama hatasi
+# ERP'de kabul edilemez (bkz. Phase 10 notlari).
+
+WAREHOUSE_TYPES = ('merkez', 'sube', 'arac', 'iade', 'karantina')
+
+STOCK_REASONS = (
+    'acilis', 'satis', 'satis_iptal', 'alim', 'alim_iade',
+    'transfer_giris', 'transfer_cikis', 'sayim', 'fire', 'duzeltme',
+)
+
+STOCK_REF_TYPES = ('sale', 'purchase', 'transfer', 'adjustment', 'opening')
+
+
+class Warehouse(Base):
+    __tablename__ = 'warehouses'
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), unique=True, nullable=False)
+    name = Column(String(255), nullable=False)
+    warehouse_type = Column(String(20), nullable=False, default='merkez')
+    parent_id = Column(Integer, ForeignKey('warehouses.id'), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    is_default = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    parent = relationship('Warehouse', remote_side=[id], backref='children')
+
+
+class StockLedgerEntry(Base):
+    """Degismez stok defteri satiri.
+
+    Bu tablodaki satirlar ASLA UPDATE veya DELETE edilmez. Yanlis giris varsa
+    reason='duzeltme' ile ters kayit atilir. Kural stock_service icinde ve
+    ORM event'leriyle zorlanir.
+    """
+    __tablename__ = 'stock_ledger_entries'
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
+    warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=False)
+    change_qty = Column(Numeric(18, 4), nullable=False)
+    balance_qty = Column(Numeric(18, 4), nullable=False)
+    reason = Column(String(20), nullable=False)
+    ref_type = Column(String(20), nullable=True)
+    ref_id = Column(Integer, nullable=True)
+    note = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    product = relationship('Product')
+    warehouse = relationship('Warehouse')
+
+    __table_args__ = (
+        # Bakiye sorgulari her zaman (urun, depo) uzerinden zaman sirali gider
+        Index('ix_sle_product_warehouse_created', 'product_id', 'warehouse_id', 'created_at'),
+        Index('ix_sle_ref', 'ref_type', 'ref_id'),
+    )
+
+
+class StockTransfer(Base):
+    __tablename__ = 'stock_transfers'
+    id = Column(Integer, primary_key=True)
+    transfer_no = Column(String(50), unique=True, nullable=False)
+    from_warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=False)
+    to_warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=False)
+    transfer_date = Column(Date, nullable=False)
+    status = Column(String(20), nullable=False, default='draft')  # draft|completed|cancelled
+    note = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    from_warehouse = relationship('Warehouse', foreign_keys=[from_warehouse_id])
+    to_warehouse = relationship('Warehouse', foreign_keys=[to_warehouse_id])
+    items = relationship(
+        'StockTransferItem', back_populates='transfer', cascade='all, delete-orphan'
+    )
+
+
+class StockTransferItem(Base):
+    __tablename__ = 'stock_transfer_items'
+    id = Column(Integer, primary_key=True)
+    transfer_id = Column(Integer, ForeignKey('stock_transfers.id'), nullable=False)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
+    quantity = Column(Numeric(18, 4), nullable=False)
+
+    transfer = relationship('StockTransfer', back_populates='items')
+    product = relationship('Product')
+
+
+# --- Ledger degismezligi: ORM seviyesinde UPDATE/DELETE engeli ---
+
+class LedgerImmutableError(Exception):
+    """Stok defteri satiri degistirilmeye/silinmeye calisildiginda firlatilir."""
+
+
+@event.listens_for(StockLedgerEntry, 'before_update')
+def _block_ledger_update(mapper, connection, target):  # noqa: ARG001
+    raise LedgerImmutableError(
+        'Stok defteri satirlari degistirilemez. Duzeltme icin ters kayit '
+        "(reason='duzeltme') atin."
+    )
+
+
+@event.listens_for(StockLedgerEntry, 'before_delete')
+def _block_ledger_delete(mapper, connection, target):  # noqa: ARG001
+    raise LedgerImmutableError(
+        'Stok defteri satirlari silinemez. Duzeltme icin ters kayit '
+        "(reason='duzeltme') atin."
+    )

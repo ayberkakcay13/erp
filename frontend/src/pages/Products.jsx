@@ -11,6 +11,8 @@ import {
   Loading,
   PageHeader,
   formatMoney,
+  formatQty,
+  qty,
 } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { productAPI } from '../services/api';
@@ -18,9 +20,12 @@ import { matches, sortRows, toggleSort } from '../utils/filters';
 
 const LOW_STOCK = 10;
 
+// Phase 10: stok backend'de ledger toplamindan hesaplaniyor ve ondalik
+// (Numeric) olarak geliyor; karsilastirmalar qty() ile sayiya cevrilir.
 function stockBadge(stock) {
-  if (stock === 0) return <Badge tone="red">Tukendi</Badge>;
-  if (stock < LOW_STOCK) return <Badge tone="yellow">Az stok</Badge>;
+  const n = qty(stock);
+  if (n <= 0) return <Badge tone="red">Tukendi</Badge>;
+  if (n < LOW_STOCK) return <Badge tone="yellow">Az stok</Badge>;
   return <Badge tone="green">Yeterli</Badge>;
 }
 
@@ -32,8 +37,9 @@ const STOCK_OPTIONS = [
 ];
 
 function stockGroup(stock) {
-  if (stock === 0) return 'out';
-  if (stock < LOW_STOCK) return 'low';
+  const n = qty(stock);
+  if (n <= 0) return 'out';
+  if (n < LOW_STOCK) return 'low';
   return 'ok';
 }
 
@@ -199,7 +205,11 @@ export default function Products() {
                   key={p.id}
                   data-testid={`product-row-${p.id}`}
                   className={`border-t border-gray-100 ${
-                    p.stock === 0 ? 'bg-red-50' : p.stock < LOW_STOCK ? 'bg-yellow-50' : ''
+                    qty(p.stock) <= 0
+                      ? 'bg-red-50'
+                      : qty(p.stock) < LOW_STOCK
+                        ? 'bg-yellow-50'
+                        : ''
                   }`}
                 >
                   <td className="px-4 py-2 text-gray-800">{p.name}</td>
@@ -209,7 +219,7 @@ export default function Products() {
                     className="px-4 py-2 text-right font-medium text-gray-800"
                     data-testid={`stock-${p.id}`}
                   >
-                    {p.stock}
+                    {formatQty(p.stock)}
                   </td>
                   <td className="px-4 py-2">{stockBadge(p.stock)}</td>
                   <td className="px-4 py-2 text-right whitespace-nowrap">

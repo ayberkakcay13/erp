@@ -24,7 +24,7 @@ export default function ProductForm({ product, onSaved, onCancel }) {
         name: form.name,
         sku: form.sku,
         price: Number(form.price),
-        stock: Number(form.stock),
+        stock: String(form.stock),
       };
       const saved = isEdit
         ? await productAPI.update(product.id, payload)

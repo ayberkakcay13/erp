@@ -1,5 +1,13 @@
-"""Sales endpointleri. Satis olustururken items'tan total_amount hesaplanir."""
+"""Sales endpointleri. Satis olustururken items'tan total_amount hesaplanir.
+
+Phase 10: stok artik `products.stock` kolonuna yazilmiyor. Her satis
+`stock_service.add_entry()` ile stok defterine hareket yazar:
+  - satis olusturma  -> change_qty = -qty, reason='satis'
+  - satis iptali     -> change_qty = +qty, reason='satis_iptal'
+Ledger satirlari asla silinmez; iptal de bir hareket olarak kaydedilir.
+"""
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import SQLAlchemyError
@@ -7,14 +15,22 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Customer, Product, Sale, SalesItem
+from ..models import Customer, Product, Sale, SalesItem, User
 from ..schemas import SaleCreate, SaleResponse, SaleStatusUpdate
+from ..services import stock_service
 
 router = APIRouter(
     prefix='/api/sales',
     tags=['sales'],
     dependencies=[Depends(get_current_user)],
 )
+
+CENTS = Decimal('0.01')
+
+
+def _money(value) -> Decimal:
+    """Tutari kurusa yuvarlar. Float'a hic ugramaz."""
+    return stock_service.to_decimal(value).quantize(CENTS)
 
 
 def _load_sale(db: Session, sale_id: int) -> Sale:
@@ -50,6 +66,7 @@ def _serialize(sale: Sale) -> dict:
                 'quantity': item.quantity,
                 'unit_price': item.unit_price,
                 'total_price': item.total_price,
+                'warehouse_id': item.warehouse_id,
                 'product_name': item.product.name if item.product else None,
                 'product_sku': item.product.sku if item.product else None,
             }
@@ -58,8 +75,28 @@ def _serialize(sale: Sale) -> dict:
     }
 
 
+def _requested_by_product_warehouse(db: Session, items) -> dict:
+    """Satis kalemlerini (urun, depo) kirilimda toplar.
+
+    Ayni urun birden fazla satirda olabilir; stok kontrolu ve ledger hareketi
+    toplam miktar uzerinden yapilir.
+    """
+    totals: dict[tuple[int, int], Decimal] = {}
+    for item in items:
+        wh_id = stock_service.resolve_warehouse_id(db, getattr(item, 'warehouse_id', None))
+        key = (item.product_id, wh_id)
+        totals[key] = totals.get(key, stock_service.ZERO) + stock_service.to_decimal(
+            item.quantity
+        )
+    return totals
+
+
 @router.post('', response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
-def create_sale(payload: SaleCreate, db: Session = Depends(get_db)):
+def create_sale(
+    payload: SaleCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     customer = db.get(Customer, payload.customer_id)
     if customer is None:
         raise HTTPException(
@@ -67,24 +104,19 @@ def create_sale(payload: SaleCreate, db: Session = Depends(get_db)):
         )
 
     # Once tum urunleri dogrula, sonra kayit ac - yarim satis olusmasin
-    products = {}
-    requested = {}
     for item in payload.items:
-        if item.product_id not in products:
-            product = db.get(Product, item.product_id)
-            if product is None:
-                raise HTTPException(
-                    status_code=404, detail=f'Product {item.product_id} bulunamadi'
-                )
-            products[item.product_id] = product
-        # Ayni urun birden fazla satirda olabilir, toplam miktar uzerinden kontrol et
-        requested[item.product_id] = requested.get(item.product_id, 0) + item.quantity
+        if db.get(Product, item.product_id) is None:
+            raise HTTPException(
+                status_code=404, detail=f'Product {item.product_id} bulunamadi'
+            )
+
+    requested = _requested_by_product_warehouse(db, payload.items)
 
     # Stok kontrolu: yetersizse hicbir kayit olusmadan 400 don
-    for product_id, quantity in requested.items():
-        product = products[product_id]
-        available = product.stock or 0
-        if available < quantity:
+    for (product_id, wh_id), quantity in requested.items():
+        if not stock_service.check_availability(db, product_id, wh_id, quantity):
+            product = db.get(Product, product_id)
+            available = stock_service.get_stock(db, product_id, wh_id)
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -96,29 +128,43 @@ def create_sale(payload: SaleCreate, db: Session = Depends(get_db)):
     sale = Sale(
         customer_id=payload.customer_id,
         sale_date=payload.sale_date or date.today(),
-        total_amount=0.0,
+        total_amount=stock_service.ZERO,
         status='pending',
     )
 
-    total = 0.0
+    total = stock_service.ZERO
     for item in payload.items:
-        line_total = round(item.quantity * item.unit_price, 2)
+        qty = stock_service.to_decimal(item.quantity)
+        unit_price = stock_service.to_decimal(item.unit_price)
+        line_total = _money(qty * unit_price)
         total += line_total
         sale.items.append(
             SalesItem(
                 product_id=item.product_id,
-                quantity=item.quantity,
-                unit_price=item.unit_price,
+                quantity=qty,
+                unit_price=unit_price,
                 total_price=line_total,
+                warehouse_id=stock_service.resolve_warehouse_id(db, item.warehouse_id),
             )
         )
-    sale.total_amount = round(total, 2)
-
-    # Stok dusur - satis kaydiyla ayni transaction'da, commit birlikte
-    for product_id, quantity in requested.items():
-        products[product_id].stock -= quantity
+    sale.total_amount = _money(total)
 
     db.add(sale)
+    db.flush()  # sale.id ledger ref_id olarak lazim
+
+    # Stok dusur - satis kaydiyla ayni transaction'da, commit birlikte
+    for (product_id, wh_id), quantity in requested.items():
+        stock_service.add_entry(
+            db,
+            product_id=product_id,
+            warehouse_id=wh_id,
+            change_qty=-quantity,
+            reason='satis',
+            ref_type='sale',
+            ref_id=sale.id,
+            user_id=current_user.id,
+        )
+
     try:
         db.commit()
     except SQLAlchemyError as exc:
@@ -151,23 +197,23 @@ def get_sale(sale_id: int, db: Session = Depends(get_db)):
     return _serialize(_load_sale(db, sale_id))
 
 
-def _item_totals(sale: Sale) -> dict[int, int]:
-    """Satistaki her urun icin toplam miktar. Ayni urun birden fazla satirda olabilir."""
-    totals = {}
-    for item in sale.items:
-        totals[item.product_id] = totals.get(item.product_id, 0) + item.quantity
-    return totals
+def _item_totals(db: Session, sale: Sale) -> dict:
+    """Satistaki (urun, depo) basina toplam miktar."""
+    return _requested_by_product_warehouse(db, sale.items)
 
 
 @router.put('/{sale_id}', response_model=SaleResponse)
 def update_sale_status(
-    sale_id: int, payload: SaleStatusUpdate, db: Session = Depends(get_db)
+    sale_id: int,
+    payload: SaleStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Satis durumunu gunceller ve stogu duruma gore geri ekler/yeniden duser.
 
     Stok mantigi: "cancelled" disindaki her durumda satis stogu tutuyor sayilir.
-    - cancelled disi -> cancelled : stok geri eklenir
-    - cancelled -> cancelled disi : stok yeniden dusulur (yetersizse 400)
+    - cancelled disi -> cancelled : ledger'a +qty (`satis_iptal`)
+    - cancelled -> cancelled disi : ledger'a -qty (`satis`), yetersizse 400
     - ayni gruptaki gecisler (pending <-> completed) stogu etkilemez
 
     Durum degismiyorsa hicbir stok hareketi olmaz, bu sayede ayni istegi
@@ -184,17 +230,19 @@ def update_sale_status(
     restore_stock = not was_cancelled and will_be_cancelled
     deduct_stock = was_cancelled and not will_be_cancelled
 
+    totals = _item_totals(db, sale) if (restore_stock or deduct_stock) else {}
+
     if deduct_stock:
         # Iptal geri alindi: stok yeniden dusulecek, once yeterli mi kontrol et
-        for product_id, quantity in _item_totals(sale).items():
+        for (product_id, wh_id), quantity in totals.items():
             product = db.get(Product, product_id)
             if product is None:
                 raise HTTPException(
                     status_code=404,
                     detail=f'Product {product_id} bulunamadi, satis geri alinamiyor',
                 )
-            available = product.stock or 0
-            if available < quantity:
+            if not stock_service.check_availability(db, product_id, wh_id, quantity):
+                available = stock_service.get_stock(db, product_id, wh_id)
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -203,12 +251,18 @@ def update_sale_status(
                     ),
                 )
 
-    if restore_stock or deduct_stock:
-        sign = 1 if restore_stock else -1
-        for product_id, quantity in _item_totals(sale).items():
-            product = db.get(Product, product_id)
-            if product is not None:
-                product.stock = (product.stock or 0) + sign * quantity
+    for (product_id, wh_id), quantity in totals.items():
+        stock_service.add_entry(
+            db,
+            product_id=product_id,
+            warehouse_id=wh_id,
+            change_qty=quantity if restore_stock else -quantity,
+            reason='satis_iptal' if restore_stock else 'satis',
+            ref_type='sale',
+            ref_id=sale.id,
+            user_id=current_user.id,
+            note=f'Satis durumu {old_status} -> {new_status}',
+        )
 
     sale.status = new_status
     try:

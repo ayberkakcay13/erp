@@ -4,6 +4,7 @@ Ciro hesaplarinda iptal edilmis satislar (status='cancelled') HARIC tutulur:
 iptal edilen bir satis gercek bir gelir degildir.
 """
 from datetime import date, timedelta
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user
 from ..database import get_db
 from ..models import Customer, Invoice, Product, Sale, SalesItem
+from ..services import stock_service
 
 router = APIRouter(
     prefix='/api/reports',
@@ -39,6 +41,11 @@ TURKISH_MONTHS = [
     'Oca', 'Sub', 'Mar', 'Nis', 'May', 'Haz',
     'Tem', 'Agu', 'Eyl', 'Eki', 'Kas', 'Ara',
 ]
+
+
+def _money(value) -> Decimal:
+    """Tutari kurusa yuvarlar (float kullanmadan)."""
+    return Decimal(str(value or 0)).quantize(Decimal('0.01'))
 
 
 def _month_label(d: date) -> str:
@@ -82,17 +89,17 @@ def sales_by_month(
     found = {}
     for row in rows:
         key = row.month.date() if hasattr(row.month, 'date') else row.month
-        found[(key.year, key.month)] = (float(row.total or 0), int(row.count or 0))
+        found[(key.year, key.month)] = (Decimal(str(row.total or 0)), int(row.count or 0))
 
     # Bos aylari 0 ile doldur - grafikte bosluk olusmasin
     result = []
     cursor = start
     for _ in range(months):
-        total, count = found.get((cursor.year, cursor.month), (0.0, 0))
+        total, count = found.get((cursor.year, cursor.month), (Decimal('0'), 0))
         result.append({
             'month': cursor.isoformat(),
             'label': _month_label(cursor),
-            'total': round(total, 2),
+            'total': _money(total),
             'count': count,
         })
         cursor = _shift_months(cursor, 1)
@@ -126,8 +133,8 @@ def top_products(
             'product_id': r.product_id,
             'name': r.name,
             'sku': r.sku,
-            'quantity': int(r.quantity or 0),
-            'revenue': round(float(r.revenue or 0), 2),
+            'quantity': Decimal(str(r.quantity or 0)),
+            'revenue': _money(r.revenue),
         }
         for r in rows
     ]
@@ -157,7 +164,7 @@ def revenue_summary(db: Session = Depends(get_db)):
             .one()
         )
         summary[key] = {
-            'total': round(float(row.total or 0), 2),
+            'total': _money(row.total),
             'count': int(row.count or 0),
             'since': start.isoformat(),
         }
@@ -195,8 +202,8 @@ def product_history(product_id: int, db: Session = Depends(get_db)):
             'status': r.status,
             'customer_name': r.customer_name,
             'quantity': r.quantity,
-            'unit_price': round(float(r.unit_price or 0), 2),
-            'total_price': round(float(r.total_price or 0), 2),
+            'unit_price': _money(r.unit_price),
+            'total_price': _money(r.total_price),
         }
         for r in rows
     ]
@@ -205,9 +212,9 @@ def product_history(product_id: int, db: Session = Depends(get_db)):
         'product_id': product.id,
         'product_name': product.name,
         'sku': product.sku,
-        'current_stock': product.stock,
-        'total_sold': sum(i['quantity'] for i in active),
-        'total_revenue': round(sum(i['total_price'] for i in active), 2),
+        'current_stock': stock_service.get_stock(db, product.id),
+        'total_sold': sum((Decimal(str(i['quantity'])) for i in active), Decimal('0')),
+        'total_revenue': _money(sum((i['total_price'] for i in active), Decimal('0'))),
         'history': items,
     }
 
@@ -217,23 +224,38 @@ def product_history(product_id: int, db: Session = Depends(get_db)):
 @alerts_router.get('/low-stock')
 def low_stock(
     threshold: int = Query(LOW_STOCK_THRESHOLD, ge=0, le=1000),
+    warehouse_id: int | None = Query(None, description='Sadece bu deponun stogu'),
     db: Session = Depends(get_db),
 ):
-    """Stogu esigin altinda kalan urunler. En az stoklu once gelir."""
-    rows = (
-        db.query(Product)
-        .filter(Product.stock < threshold)
-        .order_by(Product.stock.asc(), Product.name.asc())
-        .all()
+    """Stogu esigin altinda kalan urunler. En az stoklu once gelir.
+
+    Phase 10: stok `products` kolonundan degil, stok defterinden hesaplanir.
+    Hic hareketi olmayan urun 0 stok sayilir, bu yuzden tum urunler taranir.
+    """
+    limit_qty = stock_service.to_decimal(threshold)
+    products = db.query(Product).all()
+    balances = stock_service.get_stock_map(
+        db, [p.id for p in products], warehouse_id=warehouse_id
     )
+
+    items = []
+    for product in products:
+        quantity = balances.get(product.id, stock_service.ZERO)
+        if quantity < limit_qty:
+            items.append({
+                'id': product.id,
+                'name': product.name,
+                'sku': product.sku,
+                'stock': quantity,
+            })
+    items.sort(key=lambda i: (i['stock'], i['name']))
+
     return {
         'threshold': threshold,
-        'count': len(rows),
-        'out_of_stock': sum(1 for p in rows if (p.stock or 0) == 0),
-        'items': [
-            {'id': p.id, 'name': p.name, 'sku': p.sku, 'stock': p.stock or 0}
-            for p in rows
-        ],
+        'warehouse_id': warehouse_id,
+        'count': len(items),
+        'out_of_stock': sum(1 for i in items if i['stock'] <= stock_service.ZERO),
+        'items': items,
     }
 
 
@@ -270,14 +292,14 @@ def overdue_invoices(
             'issued_date': invoice.issued_date.isoformat(),
             'due_date': (invoice.issued_date + timedelta(days=days)).isoformat(),
             'days_overdue': (today - invoice.issued_date).days - days,
-            'total_amount': round(float(invoice.total_amount or 0), 2),
+            'total_amount': _money(invoice.total_amount),
             'status': invoice.status,
         })
 
     return {
         'days': days,
         'count': len(items),
-        'total_amount': round(sum(i['total_amount'] for i in items), 2),
+        'total_amount': _money(sum((i['total_amount'] for i in items), Decimal('0'))),
         'items': items,
     }
 

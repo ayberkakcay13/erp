@@ -1,5 +1,6 @@
 """Invoice endpointleri. Fatura her zaman bir satistan uretilir."""
 from datetime import date, datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -37,7 +38,10 @@ def generate_invoice_from_sale(
         )
 
     payload = payload or InvoiceCreate()
-    total = round(sale.total_amount * (1 + payload.tax_rate), 2)
+    # Para hesabi Decimal ile yapilir (Phase 10 kurali: float yok)
+    total = (
+        Decimal(str(sale.total_amount)) * (Decimal('1') + Decimal(str(payload.tax_rate)))
+    ).quantize(Decimal('0.01'))
 
     invoice = Invoice(
         sale_id=sale.id,

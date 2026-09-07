@@ -1,5 +1,6 @@
 """Pydantic request/response modelleri (Pydantic v2)."""
 from datetime import date, datetime
+from decimal import Decimal
 from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -35,19 +36,26 @@ class CustomerResponse(CustomerBase):
 class ProductBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     sku: str = Field(min_length=1, max_length=50)
-    price: float = Field(ge=0)
-    stock: int = Field(default=0, ge=0)
+    price: Decimal = Field(ge=0)
 
 
 class ProductCreate(ProductBase):
-    pass
+    """`stock` artik urunun kolonu degil, acilis stok hareketi (Phase 10).
+
+    Verilirse `reason='acilis'` ile varsayilan (ya da secilen) depoya
+    ledger kaydi atilir.
+    """
+    stock: Decimal = Field(default=Decimal('0'), ge=0)
+    warehouse_id: Optional[int] = None
 
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     sku: Optional[str] = Field(default=None, min_length=1, max_length=50)
-    price: Optional[float] = Field(default=None, ge=0)
-    stock: Optional[int] = Field(default=None, ge=0)
+    price: Optional[Decimal] = Field(default=None, ge=0)
+    # Stok dogrudan yazilmaz; verilirse fark kadar `duzeltme` hareketi atilir.
+    stock: Optional[Decimal] = Field(default=None, ge=0)
+    warehouse_id: Optional[int] = None
 
 
 class ProductResponse(ProductBase):
@@ -55,14 +63,17 @@ class ProductResponse(ProductBase):
 
     id: int
     created_at: Optional[datetime] = None
+    # Ledger toplamindan hesaplanir, tabloda kolon degildir.
+    stock: Decimal = Decimal('0')
 
 
 # ---------------- SalesItem ----------------
 
 class SalesItemCreate(BaseModel):
     product_id: int
-    quantity: int = Field(gt=0)
-    unit_price: float = Field(ge=0)
+    quantity: Decimal = Field(gt=0)
+    unit_price: Decimal = Field(ge=0)
+    warehouse_id: Optional[int] = None
 
 
 class SalesItemResponse(BaseModel):
@@ -70,11 +81,13 @@ class SalesItemResponse(BaseModel):
 
     id: int
     product_id: int
-    quantity: int
-    unit_price: float
-    total_price: float
+    quantity: Decimal
+    unit_price: Decimal
+    total_price: Decimal
+    warehouse_id: Optional[int] = None
     product_name: Optional[str] = None
     product_sku: Optional[str] = None
+    warehouse_name: Optional[str] = None
 
 
 # ---------------- Sale ----------------
@@ -95,7 +108,7 @@ class SaleResponse(BaseModel):
     id: int
     customer_id: int
     sale_date: date
-    total_amount: float
+    total_amount: Decimal
     status: str
     created_at: Optional[datetime] = None
     customer: Optional[CustomerResponse] = None
@@ -107,7 +120,7 @@ class SaleResponse(BaseModel):
 class InvoiceCreate(BaseModel):
     """POST /api/sales/{sale_id}/invoice govdesi - hepsi opsiyonel."""
     issued_date: Optional[date] = None
-    tax_rate: float = Field(default=0.0, ge=0, le=1, description='0.20 = %20 KDV')
+    tax_rate: Decimal = Field(default=Decimal('0'), ge=0, le=1, description='0.20 = %20 KDV')
 
 
 class InvoiceStatusUpdate(BaseModel):
@@ -122,7 +135,7 @@ class InvoiceResponse(BaseModel):
     invoice_number: str
     customer_id: int
     issued_date: date
-    total_amount: float
+    total_amount: Decimal
     status: str
     created_at: Optional[datetime] = None
 
@@ -158,3 +171,118 @@ class Token(BaseModel):
     access_token: str
     token_type: str = 'bearer'
     user: UserResponse
+
+
+# ---------------- Phase 10: Depo / Stok Defteri / Transfer ----------------
+
+WAREHOUSE_TYPE_PATTERN = '^(merkez|sube|arac|iade|karantina)$'
+STOCK_REASON_PATTERN = (
+    '^(acilis|satis|satis_iptal|alim|alim_iade|transfer_giris|transfer_cikis'
+    '|sayim|fire|duzeltme)$'
+)
+
+
+class WarehouseBase(BaseModel):
+    code: str = Field(min_length=1, max_length=50)
+    name: str = Field(min_length=1, max_length=255)
+    warehouse_type: str = Field(default='merkez', pattern=WAREHOUSE_TYPE_PATTERN)
+    parent_id: Optional[int] = None
+    is_active: bool = True
+    is_default: bool = False
+
+
+class WarehouseCreate(WarehouseBase):
+    pass
+
+
+class WarehouseUpdate(BaseModel):
+    code: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    warehouse_type: Optional[str] = Field(default=None, pattern=WAREHOUSE_TYPE_PATTERN)
+    parent_id: Optional[int] = None
+    is_active: Optional[bool] = None
+    is_default: Optional[bool] = None
+
+
+class WarehouseResponse(WarehouseBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    created_at: Optional[datetime] = None
+
+
+class StockLedgerEntryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    product_id: int
+    warehouse_id: int
+    change_qty: Decimal
+    balance_qty: Decimal
+    reason: str
+    ref_type: Optional[str] = None
+    ref_id: Optional[int] = None
+    note: Optional[str] = None
+    created_by: Optional[int] = None
+    created_at: Optional[datetime] = None
+    product_name: Optional[str] = None
+    product_sku: Optional[str] = None
+    warehouse_name: Optional[str] = None
+
+
+class StockBalanceRow(BaseModel):
+    product_id: int
+    product_name: str
+    sku: str
+    warehouse_id: Optional[int] = None
+    warehouse_name: Optional[str] = None
+    quantity: Decimal
+
+
+class StockAdjustment(BaseModel):
+    """Elle stok duzeltme / sayim girisi."""
+    product_id: int
+    warehouse_id: Optional[int] = None
+    change_qty: Decimal = Field()
+    reason: str = Field(default='duzeltme', pattern=STOCK_REASON_PATTERN)
+    note: Optional[str] = None
+
+
+class StockTransferItemCreate(BaseModel):
+    product_id: int
+    quantity: Decimal = Field(gt=0)
+
+
+class StockTransferItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    product_id: int
+    quantity: Decimal
+    product_name: Optional[str] = None
+    product_sku: Optional[str] = None
+
+
+class StockTransferCreate(BaseModel):
+    from_warehouse_id: int
+    to_warehouse_id: int
+    transfer_date: Optional[date] = None
+    note: Optional[str] = None
+    items: List[StockTransferItemCreate] = Field(min_length=1)
+
+
+class StockTransferResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    transfer_no: str
+    from_warehouse_id: int
+    to_warehouse_id: int
+    transfer_date: date
+    status: str
+    note: Optional[str] = None
+    created_by: Optional[int] = None
+    created_at: Optional[datetime] = None
+    from_warehouse_name: Optional[str] = None
+    to_warehouse_name: Optional[str] = None
+    items: List[StockTransferItemResponse] = []

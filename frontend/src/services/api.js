@@ -143,6 +143,31 @@ export const alertAPI = {
   summary: () => unwrap(api.get('/api/alerts/summary')),
 };
 
+// ---------------- Phase 10: Depo ve stok defteri ----------------
+
+export const warehouseAPI = {
+  getAll: (params) => unwrap(api.get('/api/warehouses', { params })),
+  getById: (id) => unwrap(api.get(`/api/warehouses/${id}`)),
+  create: (data) => unwrap(api.post('/api/warehouses', data)),
+  update: (id, data) => unwrap(api.put(`/api/warehouses/${id}`, data)),
+  delete: (id) => unwrap(api.delete(`/api/warehouses/${id}`)),
+  stock: (id) => unwrap(api.get(`/api/warehouses/${id}/stock`)),
+};
+
+export const stockAPI = {
+  balance: (params) => unwrap(api.get('/api/stock/balance', { params })),
+  ledger: (params) => unwrap(api.get('/api/stock/ledger', { params })),
+  productHistory: (id, params) =>
+    unwrap(api.get(`/api/stock/product/${id}/history`, { params })),
+  adjust: (data) => unwrap(api.post('/api/stock/adjustments', data)),
+};
+
+export const transferAPI = {
+  getAll: (params) => unwrap(api.get('/api/transfers', { params })),
+  getById: (id) => unwrap(api.get(`/api/transfers/${id}`)),
+  create: (data) => unwrap(api.post('/api/transfers', data)),
+};
+
 export const userAPI = {
   getAll: () => unwrap(api.get('/api/users')),
   create: (data) => unwrap(api.post('/api/auth/register', data)),

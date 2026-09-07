@@ -7,6 +7,9 @@ const links = [
   { to: '/products', label: 'Urunler' },
   { to: '/sales', label: 'Satislar' },
   { to: '/invoices', label: 'Faturalar' },
+  { to: '/stock', label: 'Stok Durumu', end: true },
+  { to: '/stock/ledger', label: 'Stok Hareketleri' },
+  { to: '/transfers', label: 'Transferler' },
   { to: '/users', label: 'Kullanicilar', adminOnly: true },
 ];
 

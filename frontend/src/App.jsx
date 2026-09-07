@@ -12,6 +12,9 @@ import Login from './pages/Login';
 import Products from './pages/Products';
 import SaleDetail from './pages/SaleDetail';
 import Sales from './pages/Sales';
+import StockBalance from './pages/StockBalance';
+import StockLedger from './pages/StockLedger';
+import Transfers from './pages/Transfers';
 import Users from './pages/Users';
 
 /** Giris yapmis kullanicinin gordugu menulu duzen. */
@@ -51,6 +54,9 @@ export default function App() {
           <Route path="/sales" element={<Protected><Sales /></Protected>} />
           <Route path="/sales/:id" element={<Protected><SaleDetail /></Protected>} />
           <Route path="/invoices" element={<Protected><Invoices /></Protected>} />
+          <Route path="/stock" element={<Protected><StockBalance /></Protected>} />
+          <Route path="/stock/ledger" element={<Protected><StockLedger /></Protected>} />
+          <Route path="/transfers" element={<Protected><Transfers /></Protected>} />
           <Route path="/users" element={<Protected adminOnly><Users /></Protected>} />
           <Route
             path="*"

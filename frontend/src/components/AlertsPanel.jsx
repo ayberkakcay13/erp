@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAlerts } from '../context/AlertsContext';
-import { Badge, ErrorMessage, Loading, formatMoney } from './ui';
+import { Badge, ErrorMessage, Loading, formatMoney, formatQty, qty } from './ui';
 
 function AlertRow({ children, onClick, testid }) {
   return (
@@ -87,7 +87,9 @@ export default function AlertsPanel() {
                     <li key={p.id} className="flex items-center gap-3 px-3 py-1.5">
                       <span className="flex-1 text-gray-700">{p.name}</span>
                       <span className="font-mono text-xs text-gray-400">{p.sku}</span>
-                      <Badge tone={p.stock === 0 ? 'red' : 'yellow'}>{p.stock} adet</Badge>
+                      <Badge tone={qty(p.stock) <= 0 ? 'red' : 'yellow'}>
+                        {formatQty(p.stock)} adet
+                      </Badge>
                     </li>
                   ))}
                 </ul>
