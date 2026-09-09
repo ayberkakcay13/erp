@@ -20,7 +20,9 @@ DEFAULT_SERIES = {
     'sale': ('ST', 5),             # satis
     'delivery_note': ('IR', 5),    # irsaliye
     'transfer': ('TR', 5),         # depo transferi
-    'purchase_order': ('SAS', 5),  # satin alma siparisi
+    'purchase_order': ('SAS', 5),    # satin alma siparisi
+    'purchase_receipt': ('MK', 5),
+    'purchase_invoice': ('AF', 5),
 }
 
 

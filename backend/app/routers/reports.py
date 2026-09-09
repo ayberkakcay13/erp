@@ -12,7 +12,18 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Customer, Invoice, Product, Sale, SalesItem
+from ..models import (
+    Customer,
+    Invoice,
+    Product,
+    PurchaseOrder,
+    PurchaseOrderItem,
+    PurchaseReceipt,
+    PurchaseReceiptItem,
+    Sale,
+    SalesItem,
+    Supplier,
+)
 from ..services import stock_service
 from ..services.tenant_service import require_module
 
@@ -230,6 +241,192 @@ def product_history(product_id: int, db: Session = Depends(get_db)):
 
 # ---------------- Phase 9: Uyarilar ----------------
 
+@router.get('/purchase-summary')
+def purchase_summary(
+    months: int = Query(6, ge=1, le=24),
+    db: Session = Depends(get_db),
+):
+    """Aylik alim toplami (onayli mal kabuller uzerinden)."""
+    start = _first_of_month(_shift_months(date.today(), months - 1))
+    rows = (
+        db.query(
+            PurchaseReceipt.receipt_date,
+            PurchaseReceiptItem.accepted_quantity,
+            PurchaseReceiptItem.unit_price,
+        )
+        .join(
+            PurchaseReceiptItem,
+            PurchaseReceiptItem.purchase_receipt_id == PurchaseReceipt.id,
+        )
+        .filter(
+            PurchaseReceipt.docstatus == 1,
+            PurchaseReceipt.receipt_date >= start,
+        )
+        .all()
+    )
+
+    buckets = {}
+    for receipt_date, quantity, unit_price in rows:
+        key = _first_of_month(receipt_date)
+        buckets[key] = buckets.get(key, Decimal('0')) + _money(
+            Decimal(str(quantity)) * Decimal(str(unit_price))
+        )
+
+    result = []
+    cursor = start
+    today_month = _first_of_month(date.today())
+    while cursor <= today_month:
+        result.append({
+            'month': cursor.isoformat(),
+            'label': _month_label(cursor),
+            'total': _money(buckets.get(cursor, Decimal('0'))),
+        })
+        cursor = _shift_months(cursor, 1)
+    return result
+
+
+@router.get('/supplier-performance')
+def supplier_performance(db: Session = Depends(get_db)):
+    """Tedarikci bazli toplam alim, teslim gecikmesi ve red orani."""
+    rows = (
+        db.query(
+            PurchaseReceipt.supplier_id,
+            Supplier.name,
+            PurchaseReceipt.receipt_date,
+            PurchaseOrder.expected_date,
+            PurchaseReceiptItem.accepted_quantity,
+            PurchaseReceiptItem.rejected_quantity,
+            PurchaseReceiptItem.unit_price,
+        )
+        .join(Supplier, Supplier.id == PurchaseReceipt.supplier_id)
+        .join(
+            PurchaseReceiptItem,
+            PurchaseReceiptItem.purchase_receipt_id == PurchaseReceipt.id,
+        )
+        .outerjoin(PurchaseOrder, PurchaseOrder.id == PurchaseReceipt.purchase_order_id)
+        .filter(PurchaseReceipt.docstatus == 1)
+        .all()
+    )
+
+    stats = {}
+    for supplier_id, name, receipt_date, expected_date, accepted, rejected, price in rows:
+        entry = stats.setdefault(supplier_id, {
+            'supplier_id': supplier_id,
+            'supplier_name': name,
+            'total_amount': Decimal('0'),
+            'accepted_quantity': Decimal('0'),
+            'rejected_quantity': Decimal('0'),
+            'delay_days': [],
+        })
+        accepted = Decimal(str(accepted))
+        rejected = Decimal(str(rejected))
+        entry['total_amount'] += _money(accepted * Decimal(str(price)))
+        entry['accepted_quantity'] += accepted
+        entry['rejected_quantity'] += rejected
+        if expected_date is not None and receipt_date is not None:
+            entry['delay_days'].append((receipt_date - expected_date).days)
+
+    result = []
+    for entry in stats.values():
+        handled = entry['accepted_quantity'] + entry['rejected_quantity']
+        delays = entry.pop('delay_days')
+        entry['total_amount'] = _money(entry['total_amount'])
+        entry['reject_rate'] = (
+            _money(entry['rejected_quantity'] * Decimal('100') / handled)
+            if handled > 0 else Decimal('0.00')
+        )
+        entry['average_delay_days'] = (
+            round(sum(delays) / len(delays), 1) if delays else None
+        )
+        result.append(entry)
+    result.sort(key=lambda r: r['total_amount'], reverse=True)
+    return result
+
+
+@router.get('/pending-purchase-orders')
+def pending_purchase_orders(db: Session = Depends(get_db)):
+    """Teslim alinmayi bekleyen onayli siparisler."""
+    orders = (
+        db.query(PurchaseOrder)
+        .join(Supplier, Supplier.id == PurchaseOrder.supplier_id)
+        .filter(
+            PurchaseOrder.docstatus == 1,
+            PurchaseOrder.status.in_(('beklemede', 'kismi_teslim')),
+        )
+        .order_by(PurchaseOrder.expected_date.is_(None), PurchaseOrder.expected_date)
+        .all()
+    )
+
+    today = date.today()
+    result = []
+    for order in orders:
+        result.append({
+            'id': order.id,
+            'po_number': order.po_number,
+            'supplier_id': order.supplier_id,
+            'supplier_name': order.supplier.name if order.supplier else None,
+            'order_date': order.order_date,
+            'expected_date': order.expected_date,
+            'status': order.status,
+            'grand_total': order.grand_total,
+            'is_overdue': (
+                order.expected_date is not None and order.expected_date < today
+            ),
+        })
+    return result
+
+
+@router.get('/product-purchase-history')
+def product_purchase_history(
+    product_id: int = Query(...),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """Urunun alim fiyat gecmisi - kar hesabinin temeli."""
+    if db.get(Product, product_id) is None:
+        raise HTTPException(status_code=404, detail=f'Product {product_id} bulunamadi')
+
+    rows = (
+        db.query(
+            PurchaseReceipt.id,
+            PurchaseReceipt.receipt_number,
+            PurchaseReceipt.receipt_date,
+            Supplier.name,
+            PurchaseReceiptItem.accepted_quantity,
+            PurchaseReceiptItem.stock_quantity,
+            PurchaseReceiptItem.unit_price,
+        )
+        .join(
+            PurchaseReceiptItem,
+            PurchaseReceiptItem.purchase_receipt_id == PurchaseReceipt.id,
+        )
+        .join(Supplier, Supplier.id == PurchaseReceipt.supplier_id)
+        .filter(
+            PurchaseReceiptItem.product_id == product_id,
+            PurchaseReceipt.docstatus == 1,
+        )
+        .order_by(PurchaseReceipt.receipt_date.desc(), PurchaseReceipt.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        {
+            'receipt_id': receipt_id,
+            'receipt_number': receipt_number,
+            'receipt_date': receipt_date,
+            'supplier_name': supplier_name,
+            'quantity': quantity,
+            'stock_quantity': stock_quantity,
+            'unit_price': unit_price,
+        }
+        for (
+            receipt_id, receipt_number, receipt_date, supplier_name,
+            quantity, stock_quantity, unit_price,
+        ) in rows
+    ]
+
+
 @alerts_router.get('/low-stock')
 def low_stock(
     threshold: int = Query(LOW_STOCK_THRESHOLD, ge=0, le=1000),
@@ -313,13 +510,44 @@ def overdue_invoices(
     }
 
 
+@alerts_router.get('/overdue-purchase-orders')
+def overdue_purchase_orders(db: Session = Depends(get_db)):
+    """Teslim tarihi gecmis onayli siparisler."""
+    today = date.today()
+    orders = (
+        db.query(PurchaseOrder)
+        .join(Supplier, Supplier.id == PurchaseOrder.supplier_id)
+        .filter(
+            PurchaseOrder.docstatus == 1,
+            PurchaseOrder.status.in_(('beklemede', 'kismi_teslim')),
+            PurchaseOrder.expected_date.isnot(None),
+            PurchaseOrder.expected_date < today,
+        )
+        .order_by(PurchaseOrder.expected_date)
+        .all()
+    )
+    return [
+        {
+            'id': order.id,
+            'po_number': order.po_number,
+            'supplier_name': order.supplier.name if order.supplier else None,
+            'expected_date': order.expected_date,
+            'days_late': (today - order.expected_date).days,
+            'grand_total': order.grand_total,
+        }
+        for order in orders
+    ]
+
+
 @alerts_router.get('/summary')
 def alerts_summary(db: Session = Depends(get_db)):
     """Navbar rozeti ve panel icin tek seferde ozet."""
     low = low_stock(threshold=LOW_STOCK_THRESHOLD, db=db)
     overdue = overdue_invoices(days=OVERDUE_DAYS, db=db)
+    late_orders = overdue_purchase_orders(db=db)
     return {
-        'total': low['count'] + overdue['count'],
+        'total': low['count'] + overdue['count'] + len(late_orders),
         'low_stock': low,
         'overdue_invoices': overdue,
+        'overdue_purchase_orders': {'count': len(late_orders), 'items': late_orders},
     }

@@ -16,7 +16,7 @@ MODULE_CODES = (
 )
 
 # Yeni bir tenant acilirken varsayilan olarak acik gelen modüller
-DEFAULT_ENABLED_MODULES = ('sales', 'stock', 'invoice', 'reports')
+DEFAULT_ENABLED_MODULES = ('sales', 'purchase', 'stock', 'invoice', 'reports')
 
 TENANT_PLANS = ('free', 'basic', 'pro')
 
@@ -253,6 +253,7 @@ class StockLedgerEntry(TenantMixin, Base):
     reason = Column(String(20), nullable=False)
     ref_type = Column(String(20), nullable=True)
     ref_id = Column(Integer, nullable=True)
+    unit_cost = Column(Numeric(18, 4), nullable=True)
     note = Column(Text, nullable=True)
     created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -343,13 +344,17 @@ class DocStatus:
 
 
 # docstatus tasiyan modeller - degismezlik kurali bunlara uygulanir
-DOCUMENT_MODELS = ('Sale', 'Invoice', 'StockTransfer')
+DOCUMENT_MODELS = (
+    'Sale', 'Invoice', 'StockTransfer',
+    'PurchaseOrder', 'PurchaseReceipt', 'PurchaseInvoice',
+)
 
 # Onayli/iptal belgede degismesine izin verilen alanlar (submit/cancel akisi)
 DOC_LIFECYCLE_FIELDS = frozenset({
     'docstatus', 'submitted_at', 'submitted_by',
     'cancelled_at', 'cancelled_by', 'cancel_reason',
     'invoice_number', 'transfer_no', 'status',
+    'po_number', 'receipt_number', 'internal_number', 'payment_status',
 })
 
 
@@ -580,6 +585,214 @@ class ProductVariantAttribute(TenantMixin, Base):
     __table_args__ = (
         UniqueConstraint('product_id', 'attribute_id', name='uq_variant_attribute'),
     )
+
+
+# ---------------- Phase 14: Tedarikci ve satin alma ----------------
+
+PURCHASE_ORDER_STATUSES = ('beklemede', 'kismi_teslim', 'tamamlandi', 'iptal')
+
+PAYMENT_STATUSES = ('odenmedi', 'kismi', 'odendi')
+
+
+class Supplier(TenantMixin, Base):
+    """Tedarikci karti.
+
+    Musteri ile ayri tablo: Phase 17'de (cari hesap) ortak bir `Party`
+    yapisina birlestirilebilir, simdilik erken soyutlama yapilmiyor.
+    """
+    __tablename__ = 'suppliers'
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), nullable=False)
+    name = Column(String(255), nullable=False)
+    tax_number = Column(String(11), nullable=True)
+    tax_office = Column(String(100), nullable=True)
+    phone = Column(String(20), nullable=True)
+    email = Column(String(255), nullable=True)
+    address = Column(Text, nullable=True)
+    city = Column(String(100), nullable=True)
+    contact_person = Column(String(255), nullable=True)
+    payment_term_days = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'code', name='uq_suppliers_tenant_code'),
+    )
+
+
+class PurchaseOrder(TenantMixin, Base):
+    """Satin alma siparisi - NIYET BEYANI, stok hareketi yaratmaz."""
+    __tablename__ = 'purchase_orders'
+    id = Column(Integer, primary_key=True)
+    po_number = Column(String(50), nullable=True)
+    supplier_id = Column(Integer, ForeignKey('suppliers.id'), nullable=False, index=True)
+    order_date = Column(Date, nullable=False, default=datetime.utcnow)
+    expected_date = Column(Date, nullable=True)
+    warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=True)
+    status = Column(String(20), nullable=False, default='beklemede')
+    docstatus = Column(Integer, nullable=False, default=0)
+    submitted_at = Column(DateTime, nullable=True)
+    submitted_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
+    subtotal = Column(Numeric(18, 4), nullable=False, default=0)
+    tax_total = Column(Numeric(18, 4), nullable=False, default=0)
+    grand_total = Column(Numeric(18, 4), nullable=False, default=0)
+    note = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    supplier = relationship('Supplier')
+    warehouse = relationship('Warehouse')
+    items = relationship(
+        'PurchaseOrderItem', back_populates='order',
+        cascade='all, delete-orphan', order_by='PurchaseOrderItem.id',
+    )
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'po_number', name='uq_po_tenant_number'),
+    )
+
+
+class PurchaseOrderItem(TenantMixin, Base):
+    __tablename__ = 'purchase_order_items'
+    id = Column(Integer, primary_key=True)
+    purchase_order_id = Column(
+        Integer, ForeignKey('purchase_orders.id'), nullable=False, index=True
+    )
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
+    uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=True)
+    quantity = Column(Numeric(18, 4), nullable=False)
+    received_quantity = Column(Numeric(18, 4), nullable=False, default=0)
+    unit_price = Column(Numeric(18, 4), nullable=False)
+    tax_rate = Column(Numeric(18, 4), nullable=False, default=0)
+    line_total = Column(Numeric(18, 4), nullable=False, default=0)
+
+    order = relationship('PurchaseOrder', back_populates='items')
+    product = relationship('Product')
+    uom = relationship('UOM')
+
+
+class PurchaseReceipt(TenantMixin, Base):
+    """Mal kabul - STOK HAREKETI YARATAN TEK satin alma belgesi."""
+    __tablename__ = 'purchase_receipts'
+    id = Column(Integer, primary_key=True)
+    receipt_number = Column(String(50), nullable=True)
+    purchase_order_id = Column(
+        Integer, ForeignKey('purchase_orders.id'), nullable=True, index=True
+    )
+    supplier_id = Column(Integer, ForeignKey('suppliers.id'), nullable=False, index=True)
+    warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=True)
+    receipt_date = Column(Date, nullable=False, default=datetime.utcnow)
+    docstatus = Column(Integer, nullable=False, default=0)
+    submitted_at = Column(DateTime, nullable=True)
+    submitted_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
+    note = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    supplier = relationship('Supplier')
+    warehouse = relationship('Warehouse')
+    order = relationship('PurchaseOrder')
+    items = relationship(
+        'PurchaseReceiptItem', back_populates='receipt',
+        cascade='all, delete-orphan', order_by='PurchaseReceiptItem.id',
+    )
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'receipt_number', name='uq_receipt_tenant_number'),
+    )
+
+
+class PurchaseReceiptItem(TenantMixin, Base):
+    __tablename__ = 'purchase_receipt_items'
+    id = Column(Integer, primary_key=True)
+    purchase_receipt_id = Column(
+        Integer, ForeignKey('purchase_receipts.id'), nullable=False, index=True
+    )
+    purchase_order_item_id = Column(
+        Integer, ForeignKey('purchase_order_items.id'), nullable=True
+    )
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
+    uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=True)
+    quantity = Column(Numeric(18, 4), nullable=False)
+    accepted_quantity = Column(Numeric(18, 4), nullable=False)
+    rejected_quantity = Column(Numeric(18, 4), nullable=False, default=0)
+    stock_quantity = Column(Numeric(18, 4), nullable=True)
+    unit_price = Column(Numeric(18, 4), nullable=False, default=0)
+    reject_reason = Column(Text, nullable=True)
+
+    receipt = relationship('PurchaseReceipt', back_populates='items')
+    order_item = relationship('PurchaseOrderItem')
+    product = relationship('Product')
+    uom = relationship('UOM')
+
+
+class PurchaseInvoice(TenantMixin, Base):
+    """Alis faturasi - MALI BELGE, stok hareketi yaratmaz.
+
+    Stok mal kabulde girmistir; fatura yalnizca borcu kaydeder.
+    """
+    __tablename__ = 'purchase_invoices'
+    id = Column(Integer, primary_key=True)
+    invoice_number = Column(String(50), nullable=False)
+    internal_number = Column(String(50), nullable=True)
+    supplier_id = Column(Integer, ForeignKey('suppliers.id'), nullable=False, index=True)
+    purchase_receipt_id = Column(
+        Integer, ForeignKey('purchase_receipts.id'), nullable=True, index=True
+    )
+    invoice_date = Column(Date, nullable=False, default=datetime.utcnow)
+    due_date = Column(Date, nullable=True)
+    subtotal = Column(Numeric(18, 4), nullable=False, default=0)
+    tax_total = Column(Numeric(18, 4), nullable=False, default=0)
+    grand_total = Column(Numeric(18, 4), nullable=False, default=0)
+    payment_status = Column(String(20), nullable=False, default='odenmedi')
+    docstatus = Column(Integer, nullable=False, default=0)
+    submitted_at = Column(DateTime, nullable=True)
+    submitted_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
+    note = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    supplier = relationship('Supplier')
+    receipt = relationship('PurchaseReceipt')
+    items = relationship(
+        'PurchaseInvoiceItem', back_populates='invoice',
+        cascade='all, delete-orphan', order_by='PurchaseInvoiceItem.id',
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            'tenant_id', 'supplier_id', 'invoice_number',
+            name='uq_pinv_tenant_supplier_number',
+        ),
+        UniqueConstraint('tenant_id', 'internal_number', name='uq_pinv_tenant_internal'),
+    )
+
+
+class PurchaseInvoiceItem(TenantMixin, Base):
+    __tablename__ = 'purchase_invoice_items'
+    id = Column(Integer, primary_key=True)
+    purchase_invoice_id = Column(
+        Integer, ForeignKey('purchase_invoices.id'), nullable=False, index=True
+    )
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
+    uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=True)
+    quantity = Column(Numeric(18, 4), nullable=False)
+    unit_price = Column(Numeric(18, 4), nullable=False)
+    tax_rate = Column(Numeric(18, 4), nullable=False, default=0)
+    line_total = Column(Numeric(18, 4), nullable=False, default=0)
+
+    invoice = relationship('PurchaseInvoice', back_populates='items')
+    product = relationship('Product')
+    uom = relationship('UOM')
 
 
 # Modeller tanimlandiktan SONRA session dinleyicilerini bagla.

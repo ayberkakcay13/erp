@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 # ---------------- Customer ----------------
@@ -601,3 +601,279 @@ class GenerateVariantsRequest(BaseModel):
 # atif yapiyor; ileri referanslari burada cozuyoruz.
 ProductCreate.model_rebuild()
 ProductResponse.model_rebuild()
+
+
+# ---------------- Phase 14: Tedarikci ve satin alma ----------------
+
+class SupplierBase(BaseModel):
+    code: str = Field(min_length=1, max_length=50)
+    name: str = Field(min_length=1, max_length=255)
+    tax_number: Optional[str] = Field(default=None, min_length=10, max_length=11)
+    tax_office: Optional[str] = Field(default=None, max_length=100)
+    phone: Optional[str] = Field(default=None, max_length=20)
+    email: Optional[str] = Field(default=None, max_length=255)
+    address: Optional[str] = None
+    city: Optional[str] = Field(default=None, max_length=100)
+    contact_person: Optional[str] = Field(default=None, max_length=255)
+    payment_term_days: int = Field(default=0, ge=0, le=365)
+    is_active: bool = True
+
+    @field_validator('tax_number')
+    @classmethod
+    def check_tax_number(cls, value):
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            return None
+        if not value.isdigit() or len(value) not in (10, 11):
+            raise ValueError('VKN 10, TCKN 11 haneli rakam olmali')
+        return value
+
+
+class SupplierCreate(SupplierBase):
+    pass
+
+
+class SupplierUpdate(BaseModel):
+    code: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    tax_number: Optional[str] = Field(default=None, min_length=10, max_length=11)
+    tax_office: Optional[str] = Field(default=None, max_length=100)
+    phone: Optional[str] = Field(default=None, max_length=20)
+    email: Optional[str] = Field(default=None, max_length=255)
+    address: Optional[str] = None
+    city: Optional[str] = Field(default=None, max_length=100)
+    contact_person: Optional[str] = Field(default=None, max_length=255)
+    payment_term_days: Optional[int] = Field(default=None, ge=0, le=365)
+    is_active: Optional[bool] = None
+
+    _check_tax_number = field_validator('tax_number')(
+        SupplierBase.check_tax_number.__func__
+    )
+
+
+class SupplierResponse(SupplierBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    created_at: Optional[datetime] = None
+
+
+class PurchaseOrderItemCreate(BaseModel):
+    product_id: int
+    uom_id: Optional[int] = None
+    quantity: Decimal = Field(gt=0)
+    unit_price: Decimal = Field(ge=0)
+    tax_rate: Decimal = Field(default=Decimal('0'), ge=0, le=100)
+
+
+class PurchaseOrderItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    product_id: int
+    product_name: Optional[str] = None
+    product_sku: Optional[str] = None
+    uom_id: Optional[int] = None
+    uom_code: Optional[str] = None
+    quantity: Decimal
+    received_quantity: Decimal
+    remaining_quantity: Decimal
+    unit_price: Decimal
+    tax_rate: Decimal
+    line_total: Decimal
+
+
+class PurchaseOrderCreate(BaseModel):
+    supplier_id: int
+    order_date: Optional[date] = None
+    expected_date: Optional[date] = None
+    warehouse_id: Optional[int] = None
+    note: Optional[str] = None
+    save_as_draft: bool = False
+    items: List[PurchaseOrderItemCreate] = Field(min_length=1)
+
+
+class PurchaseOrderUpdate(BaseModel):
+    supplier_id: Optional[int] = None
+    order_date: Optional[date] = None
+    expected_date: Optional[date] = None
+    warehouse_id: Optional[int] = None
+    note: Optional[str] = None
+    items: Optional[List[PurchaseOrderItemCreate]] = None
+
+
+class PurchaseOrderResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    po_number: Optional[str] = None
+    supplier_id: int
+    supplier_name: Optional[str] = None
+    order_date: date
+    expected_date: Optional[date] = None
+    warehouse_id: Optional[int] = None
+    status: str
+    docstatus: int
+    docstatus_label: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: Optional[str] = None
+    subtotal: Decimal
+    tax_total: Decimal
+    grand_total: Decimal
+    note: Optional[str] = None
+    created_at: Optional[datetime] = None
+    items: List[PurchaseOrderItemResponse] = []
+
+
+class PurchaseReceiptItemCreate(BaseModel):
+    product_id: int
+    purchase_order_item_id: Optional[int] = None
+    uom_id: Optional[int] = None
+    quantity: Decimal = Field(gt=0)
+    accepted_quantity: Optional[Decimal] = Field(default=None, ge=0)
+    rejected_quantity: Decimal = Field(default=Decimal('0'), ge=0)
+    unit_price: Decimal = Field(default=Decimal('0'), ge=0)
+    reject_reason: Optional[str] = None
+
+
+class PurchaseReceiptItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    product_id: int
+    product_name: Optional[str] = None
+    product_sku: Optional[str] = None
+    purchase_order_item_id: Optional[int] = None
+    uom_id: Optional[int] = None
+    uom_code: Optional[str] = None
+    quantity: Decimal
+    accepted_quantity: Decimal
+    rejected_quantity: Decimal
+    stock_quantity: Optional[Decimal] = None
+    unit_price: Decimal
+    reject_reason: Optional[str] = None
+
+
+class PurchaseReceiptCreate(BaseModel):
+    supplier_id: int
+    purchase_order_id: Optional[int] = None
+    warehouse_id: Optional[int] = None
+    receipt_date: Optional[date] = None
+    note: Optional[str] = None
+    save_as_draft: bool = False
+    items: List[PurchaseReceiptItemCreate] = Field(min_length=1)
+
+
+class PurchaseReceiptResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    receipt_number: Optional[str] = None
+    purchase_order_id: Optional[int] = None
+    po_number: Optional[str] = None
+    supplier_id: int
+    supplier_name: Optional[str] = None
+    warehouse_id: Optional[int] = None
+    receipt_date: date
+    docstatus: int
+    docstatus_label: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: Optional[str] = None
+    note: Optional[str] = None
+    created_at: Optional[datetime] = None
+    items: List[PurchaseReceiptItemResponse] = []
+
+
+class PurchaseInvoiceItemCreate(BaseModel):
+    product_id: int
+    uom_id: Optional[int] = None
+    quantity: Decimal = Field(gt=0)
+    unit_price: Decimal = Field(ge=0)
+    tax_rate: Decimal = Field(default=Decimal('0'), ge=0, le=100)
+
+
+class PurchaseInvoiceItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    product_id: int
+    product_name: Optional[str] = None
+    product_sku: Optional[str] = None
+    uom_id: Optional[int] = None
+    uom_code: Optional[str] = None
+    quantity: Decimal
+    unit_price: Decimal
+    tax_rate: Decimal
+    line_total: Decimal
+
+
+class PurchaseInvoiceCreate(BaseModel):
+    supplier_id: int
+    invoice_number: str = Field(min_length=1, max_length=50)
+    purchase_receipt_id: Optional[int] = None
+    invoice_date: Optional[date] = None
+    due_date: Optional[date] = None
+    note: Optional[str] = None
+    save_as_draft: bool = False
+    items: List[PurchaseInvoiceItemCreate] = Field(min_length=1)
+
+
+class PurchaseInvoiceUpdate(BaseModel):
+    invoice_number: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    invoice_date: Optional[date] = None
+    due_date: Optional[date] = None
+    payment_status: Optional[str] = None
+    note: Optional[str] = None
+    items: Optional[List[PurchaseInvoiceItemCreate]] = None
+
+
+class PurchaseInvoiceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    invoice_number: str
+    internal_number: Optional[str] = None
+    supplier_id: int
+    supplier_name: Optional[str] = None
+    purchase_receipt_id: Optional[int] = None
+    receipt_number: Optional[str] = None
+    invoice_date: date
+    due_date: Optional[date] = None
+    subtotal: Decimal
+    tax_total: Decimal
+    grand_total: Decimal
+    payment_status: str
+    docstatus: int
+    docstatus_label: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: Optional[str] = None
+    note: Optional[str] = None
+    created_at: Optional[datetime] = None
+    items: List[PurchaseInvoiceItemResponse] = []
+
+
+class PurchaseMatchRow(BaseModel):
+    product_id: int
+    product_name: Optional[str] = None
+    uom_id: Optional[int] = None
+    ordered_quantity: Decimal
+    received_quantity: Decimal
+    invoiced_quantity: Decimal
+    order_unit_price: Decimal
+    receipt_unit_price: Optional[Decimal] = None
+    invoice_unit_price: Optional[Decimal] = None
+    quantity_difference: bool
+    price_difference: bool
+
+
+class PurchaseMatchResponse(BaseModel):
+    purchase_order_id: int
+    po_number: Optional[str] = None
+    status: str
+    has_difference: bool
+    rows: List[PurchaseMatchRow] = []

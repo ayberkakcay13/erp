@@ -34,6 +34,13 @@ TEST_ADMIN_PASSWORD = 'pytest-admin-123'
 # Silme sirasi FK bagimliliklarini takip eder (once cocuk, sonra ebeveyn)
 CLEANUP_ORDER = [
     ('audit_logs', 'id'),
+    # Phase 14 tablolari urun/depo/tedarikciden ONCE silinmeli (FK)
+    ('purchase_invoice_items', 'id'),
+    ('purchase_invoices', 'id'),
+    ('purchase_receipt_items', 'id'),
+    ('purchase_receipts', 'id'),
+    ('purchase_order_items', 'id'),
+    ('purchase_orders', 'id'),
     # Phase 13 tablolari urunlerden ONCE silinmeli (FK)
     ('product_variant_attributes', 'id'),
     ('product_barcodes', 'id'),
@@ -48,6 +55,7 @@ CLEANUP_ORDER = [
     ('item_attribute_values', 'id'),
     ('item_attributes', 'id'),
     ('customers', 'id'),
+    ('suppliers', 'id'),
     ('warehouses', 'id'),
     ('item_groups', 'id'),
     ('brands', 'id'),
@@ -226,6 +234,35 @@ class Tracker:
                     {'w': warehouse_id},
                 ):
                     self.add('stock_ledger_entries', row[0])
+            # Phase 14: belge -> kalem ve mal kabul -> ledger cascade'leri
+            for supplier_id in self._rows.get('suppliers', set()):
+                for table in ('purchase_orders', 'purchase_receipts', 'purchase_invoices'):
+                    for row in conn.execute(
+                        text(f'SELECT id FROM {table} WHERE supplier_id = :s'),
+                        {'s': supplier_id},
+                    ):
+                        self.add(table, row[0])
+            for parent_table, child_table, column in (
+                ('purchase_orders', 'purchase_order_items', 'purchase_order_id'),
+                ('purchase_receipts', 'purchase_receipt_items', 'purchase_receipt_id'),
+                ('purchase_invoices', 'purchase_invoice_items', 'purchase_invoice_id'),
+            ):
+                for parent_id in self._rows.get(parent_table, set()):
+                    for row in conn.execute(
+                        text(f'SELECT id FROM {child_table} WHERE {column} = :p'),
+                        {'p': parent_id},
+                    ):
+                        self.add(child_table, row[0])
+            for receipt_id in self._rows.get('purchase_receipts', set()):
+                for row in conn.execute(
+                    text(
+                        'SELECT id FROM stock_ledger_entries '
+                        "WHERE ref_type = 'purchase' AND ref_id = :r"
+                    ),
+                    {'r': receipt_id},
+                ):
+                    self.add('stock_ledger_entries', row[0])
+
             for attribute_id in self._rows.get('item_attributes', set()):
                 for row in conn.execute(
                     text('SELECT id FROM item_attribute_values WHERE attribute_id = :a'),
@@ -246,6 +283,12 @@ class Tracker:
                 'invoices': 'invoices', 'warehouses': 'warehouses',
                 'stock_transfers': 'stock_transfers', 'sales_items': 'sales_items',
                 'stock_transfer_items': 'stock_transfer_items',
+                'suppliers': 'suppliers', 'purchase_orders': 'purchase_orders',
+                'purchase_order_items': 'purchase_order_items',
+                'purchase_receipts': 'purchase_receipts',
+                'purchase_receipt_items': 'purchase_receipt_items',
+                'purchase_invoices': 'purchase_invoices',
+                'purchase_invoice_items': 'purchase_invoice_items',
             }
             for table, log_table in audited.items():
                 ids = self._rows.get(table)

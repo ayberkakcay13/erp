@@ -52,6 +52,13 @@ class TenantHandle:
 
 # Cocuk tablodan ebeveyne dogru silme sirasi (FK ihlali olmasin)
 TENANT_DELETE_ORDER = (
+    'purchase_invoice_items',
+    'purchase_invoices',
+    'purchase_receipt_items',
+    'purchase_receipts',
+    'purchase_order_items',
+    'purchase_orders',
+    'suppliers',
     'product_variant_attributes',
     'product_barcodes',
     'uom_conversions',
@@ -89,13 +96,15 @@ def _cleanup_tenant(tenant_id: int) -> None:
         conn.execute(
             text('DELETE FROM audit_logs WHERE user_id = ANY(:u)'), {'u': user_ids}
         )
-        for table in ('sales', 'invoices', 'stock_transfers'):
+        for table in ('sales', 'invoices', 'stock_transfers', 'purchase_orders',
+                      'purchase_receipts', 'purchase_invoices'):
             for column in ('submitted_by', 'cancelled_by'):
                 conn.execute(
                     text(f'UPDATE {table} SET {column} = NULL WHERE {column} = ANY(:u)'),
                     {'u': user_ids},
                 )
-        for table in ('stock_ledger_entries', 'stock_transfers'):
+        for table in ('stock_ledger_entries', 'stock_transfers', 'purchase_orders',
+                      'purchase_receipts', 'purchase_invoices'):
             conn.execute(
                 text(f'UPDATE {table} SET created_by = NULL WHERE created_by = ANY(:u)'),
                 {'u': user_ids},

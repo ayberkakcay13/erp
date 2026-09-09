@@ -132,6 +132,7 @@ def add_entry(
     user_id: Optional[int] = None,
     note: Optional[str] = None,
     allow_negative: Optional[bool] = None,
+    unit_cost=None,
 ) -> StockLedgerEntry:
     """Ledger'a tek bir hareket yazar ve bakiyeyi otomatik hesaplar.
 
@@ -179,6 +180,7 @@ def add_entry(
         ref_type=ref_type,
         ref_id=ref_id,
         note=note,
+        unit_cost=None if unit_cost is None else to_decimal(unit_cost),
         created_by=user_id,
     )
     db.add(entry)

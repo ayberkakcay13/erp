@@ -16,14 +16,31 @@ from typing import Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from ..models import DocStatus, Invoice, Sale, StockTransfer
-from . import audit_service, naming_service, stock_service, tenant_context
+from ..models import (
+    DocStatus,
+    Invoice,
+    PurchaseInvoice,
+    PurchaseOrder,
+    PurchaseReceipt,
+    Sale,
+    StockTransfer,
+)
+from . import (
+    audit_service,
+    naming_service,
+    purchase_service,
+    stock_service,
+    tenant_context,
+)
 
 # Belge tipi -> (numaralandirma doc_type, numara alani)
 NUMBERING = {
     Sale: (None, None),                     # satis numarasi zorunlu degil
     Invoice: ('invoice', 'invoice_number'),
     StockTransfer: ('transfer', 'transfer_no'),
+    PurchaseOrder: ('purchase_order', 'po_number'),
+    PurchaseReceipt: ('purchase_receipt', 'receipt_number'),
+    PurchaseInvoice: ('purchase_invoice', 'internal_number'),
 }
 
 
@@ -110,12 +127,24 @@ def _transfer_stock_entries(db: Session, transfer: StockTransfer, sign: int, use
         )
 
 
+def _purchase_invoice_effects(db: Session, invoice: PurchaseInvoice) -> None:
+    """Alis faturasi stok hareketi yaratmaz; yalnizca vadeyi tamamlar."""
+    if invoice.due_date is None:
+        supplier = purchase_service.get_supplier(db, invoice.supplier_id)
+        invoice.due_date = purchase_service.due_date_for(supplier, invoice.invoice_date)
+
+
 def _apply_effects(db: Session, doc, submitting: bool, user_id, note: str) -> None:
     if isinstance(doc, Sale):
         _sale_stock_entries(db, doc, -1 if submitting else 1, user_id, note)
     elif isinstance(doc, StockTransfer):
         _transfer_stock_entries(db, doc, 1 if submitting else -1, user_id, note)
-    # Invoice'in stok yan etkisi yok - stok satista hareket eder.
+    elif isinstance(doc, PurchaseReceipt):
+        purchase_service.apply_receipt(db, doc, 1 if submitting else -1, user_id)
+    elif isinstance(doc, PurchaseInvoice) and submitting:
+        _purchase_invoice_effects(db, doc)
+    # Invoice ve PurchaseOrder'in stok yan etkisi yok - stok satis ve mal
+    # kabulde hareket eder.
 
 
 # ---------------- Genel gecisler ----------------
