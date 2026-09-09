@@ -50,15 +50,58 @@ class TenantHandle:
         self.password = password
 
 
+# Cocuk tablodan ebeveyne dogru silme sirasi (FK ihlali olmasin)
+TENANT_DELETE_ORDER = (
+    'product_variant_attributes',
+    'product_barcodes',
+    'uom_conversions',
+    'stock_ledger_entries',
+    'stock_transfer_items',
+    'stock_transfers',
+    'invoices',
+    'sales_items',
+    'sales',
+    'audit_logs',
+    'products',
+    'item_attribute_values',
+    'item_attributes',
+    'customers',
+    'warehouses',
+    'uoms',
+    'item_groups',
+    'brands',
+    'naming_series',
+    'users',
+    'tenant_modules',
+)
+
+
 def _cleanup_tenant(tenant_id: int) -> None:
     """Test tenant'ina ait TUM satirlari siler - production'da iz kalmaz."""
     with admin_connection() as conn:
-        for table in (
-            'audit_logs', 'stock_ledger_entries', 'stock_transfer_items',
-            'stock_transfers', 'invoices', 'sales_items', 'sales',
-            'products', 'customers', 'warehouses', 'naming_series',
-            'users', 'tenant_modules',
-        ):
+        # Bu tenant'in kullanicilarinin BASKA tablolarda biraktigi izler once
+        # temizlenir; yoksa users silinirken FK ihlali olur.
+        user_ids = [
+            r[0] for r in conn.execute(
+                text('SELECT id FROM users WHERE tenant_id = :t'), {'t': tenant_id}
+            )
+        ] or [0]
+        conn.execute(
+            text('DELETE FROM audit_logs WHERE user_id = ANY(:u)'), {'u': user_ids}
+        )
+        for table in ('sales', 'invoices', 'stock_transfers'):
+            for column in ('submitted_by', 'cancelled_by'):
+                conn.execute(
+                    text(f'UPDATE {table} SET {column} = NULL WHERE {column} = ANY(:u)'),
+                    {'u': user_ids},
+                )
+        for table in ('stock_ledger_entries', 'stock_transfers'):
+            conn.execute(
+                text(f'UPDATE {table} SET created_by = NULL WHERE created_by = ANY(:u)'),
+                {'u': user_ids},
+            )
+
+        for table in TENANT_DELETE_ORDER:
             conn.execute(
                 text(f'DELETE FROM {table} WHERE tenant_id = :t'), {'t': tenant_id}
             )

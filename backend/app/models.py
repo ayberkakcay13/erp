@@ -90,7 +90,47 @@ class Product(TenantMixin, Base):
     sku = Column(String(50), nullable=False)
     price = Column(Numeric(18, 4), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # --- Phase 13: urun karti ---
+    # Stok DAIMA stock_uom cinsinden tutulur; alim/satis farkli birimdeyse
+    # ledger'a yazmadan once uom_service.convert() ile bu birime cevrilir.
+    stock_uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=True)
+    purchase_uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=True)
+    sales_uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=True)
+    item_group_id = Column(Integer, ForeignKey('item_groups.id'), nullable=True)
+    brand_id = Column(Integer, ForeignKey('brands.id'), nullable=True)
+    # hizmet urunu stok tutmaz
+    product_type = Column(String(20), nullable=False, default='stoklu')
+    is_active = Column(Boolean, nullable=False, default=True)
+    description = Column(Text, nullable=True)
+    image_url = Column(String(500), nullable=True)
+    # Phase 26'da kullanilacak, simdilik alan olarak duruyor
+    min_stock_level = Column(Numeric(18, 4), nullable=True)
+    max_stock_level = Column(Numeric(18, 4), nullable=True)
+    # Varyant sistemi: sablon urun stok TUTMAZ, stok varyantlarda durur
+    is_variant_template = Column(Boolean, nullable=False, default=False)
+    parent_product_id = Column(Integer, ForeignKey('products.id'), nullable=True)
+
     sales_items = relationship('SalesItem', back_populates='product')
+    stock_uom = relationship('UOM', foreign_keys=[stock_uom_id])
+    purchase_uom = relationship('UOM', foreign_keys=[purchase_uom_id])
+    sales_uom = relationship('UOM', foreign_keys=[sales_uom_id])
+    item_group = relationship('ItemGroup')
+    brand = relationship('Brand')
+    barcodes = relationship(
+        'ProductBarcode', back_populates='product', cascade='all, delete-orphan'
+    )
+    # remote_side=[id] -> bu taraf "cocuk", karsi taraf "sablon".
+    # backref sayesinde sablon urunun varyantlari product.variants ile gelir.
+    template = relationship(
+        'Product', remote_side=[id], foreign_keys=[parent_product_id],
+        backref='variants',
+    )
+    variant_attributes = relationship(
+        'ProductVariantAttribute',
+        primaryjoin='Product.id == ProductVariantAttribute.product_id',
+        cascade='all, delete-orphan',
+        viewonly=False,
+    )
 
     __table_args__ = (
         UniqueConstraint('tenant_id', 'sku', name='uq_products_tenant_sku'),
@@ -124,8 +164,13 @@ class SalesItem(TenantMixin, Base):
     total_price = Column(Numeric(18, 4), nullable=False)
     # Phase 10: satis kalemi hangi depodan cikti (bossa varsayilan depo)
     warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=True)
+    # Phase 13: `quantity` musterinin girdigi birimde (fiyat da o birimde),
+    # `stock_quantity` ise stok birimine cevrilmis hali - ledger bunu kullanir.
+    uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=True)
+    stock_quantity = Column(Numeric(18, 4), nullable=True)
     sale = relationship('Sale', back_populates='items')
     product = relationship('Product', back_populates='sales_items')
+    uom = relationship('UOM')
 
 class Invoice(TenantMixin, Base):
     __tablename__ = 'invoices'
@@ -365,6 +410,176 @@ class AuditLog(TenantMixin, Base):
 
 class DocumentImmutableError(Exception):
     """Onaylanmis/iptal edilmis belge degistirilmeye calisildiginda firlatilir."""
+
+
+# ---------------- Phase 13: Olcu birimi, kategori ve urun yapisi ----------------
+
+# Varsayilan olcu birimleri: (kod, ad, bolunemez mi)
+DEFAULT_UOMS = (
+    ('adet', 'Adet', True),
+    ('kg', 'Kilogram', False),
+    ('gram', 'Gram', False),
+    ('litre', 'Litre', False),
+    ('metre', 'Metre', False),
+    ('m2', 'Metrekare', False),
+    ('m3', 'Metrekup', False),
+    ('paket', 'Paket', True),
+    ('koli', 'Koli', True),
+    ('kutu', 'Kutu', True),
+    ('ton', 'Ton', False),
+)
+
+# Urun bagimsiz, evrensel donusumler: (kaynak, hedef, carpan)
+DEFAULT_CONVERSIONS = (
+    ('kg', 'gram', '1000'),
+    ('ton', 'kg', '1000'),
+    ('m3', 'litre', '1000'),
+)
+
+PRODUCT_TYPES = ('stoklu', 'hizmet', 'sarf')
+
+BARCODE_TYPES = ('EAN13', 'EAN8', 'CODE128', 'QR')
+
+
+class UOM(TenantMixin, Base):
+    """Olcu birimi. `is_integer` bolunemez birimleri isaretler (adet, koli)."""
+    __tablename__ = 'uoms'
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), nullable=False)
+    name = Column(String(50), nullable=False)
+    is_integer = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'code', name='uq_uoms_tenant_code'),
+    )
+
+
+class UOMConversion(TenantMixin, Base):
+    """Birim donusum carpani.
+
+    `product_id` bossa evrensel donusum (1 kg = 1000 gram),
+    doluysa o urune ozel donusum (X urunu icin 1 koli = 12 adet).
+    Urune ozel kayit evrensel kaydi EZER.
+    """
+    __tablename__ = 'uom_conversions'
+    id = Column(Integer, primary_key=True)
+    from_uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=False)
+    to_uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=False)
+    # Decimal: "1 top kumas = 47.5 metre" gibi durumlar var
+    factor = Column(Numeric(18, 6), nullable=False)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    from_uom = relationship('UOM', foreign_keys=[from_uom_id])
+    to_uom = relationship('UOM', foreign_keys=[to_uom_id])
+
+    __table_args__ = (
+        UniqueConstraint(
+            'tenant_id', 'from_uom_id', 'to_uom_id', 'product_id',
+            name='uq_uom_conversion',
+        ),
+        Index('ix_uom_conversion_lookup', 'tenant_id', 'from_uom_id', 'to_uom_id'),
+    )
+
+
+class ItemGroup(TenantMixin, Base):
+    """Urun kategorisi - agac yapi (Elektronik > Bilgisayar > Dizustu)."""
+    __tablename__ = 'item_groups'
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), nullable=False)
+    name = Column(String(255), nullable=False)
+    parent_id = Column(Integer, ForeignKey('item_groups.id'), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    parent = relationship('ItemGroup', remote_side=[id], backref='children')
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'code', name='uq_item_groups_tenant_code'),
+    )
+
+
+class Brand(TenantMixin, Base):
+    __tablename__ = 'brands'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'name', name='uq_brands_tenant_name'),
+    )
+
+
+class ProductBarcode(TenantMixin, Base):
+    """Bir urunun birden fazla barkodu olabilir: adet barkodu ayri, koli ayri."""
+    __tablename__ = 'product_barcodes'
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False, index=True)
+    barcode = Column(String(64), nullable=False)
+    barcode_type = Column(String(20), nullable=False, default='EAN13')
+    uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=True)
+    is_primary = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    product = relationship('Product', back_populates='barcodes')
+    uom = relationship('UOM')
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'barcode', name='uq_barcodes_tenant_code'),
+    )
+
+
+class ItemAttribute(TenantMixin, Base):
+    """Varyant ozniteligi: Renk, Beden."""
+    __tablename__ = 'item_attributes'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    values = relationship(
+        'ItemAttributeValue', back_populates='attribute', cascade='all, delete-orphan',
+        order_by='ItemAttributeValue.sort_order',
+    )
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'name', name='uq_item_attributes_tenant_name'),
+    )
+
+
+class ItemAttributeValue(TenantMixin, Base):
+    """Oznitelik degeri: Kirmizi/Mavi, S/M/L."""
+    __tablename__ = 'item_attribute_values'
+    id = Column(Integer, primary_key=True)
+    attribute_id = Column(
+        Integer, ForeignKey('item_attributes.id'), nullable=False, index=True
+    )
+    value = Column(String(100), nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+
+    attribute = relationship('ItemAttribute', back_populates='values')
+
+    __table_args__ = (
+        UniqueConstraint('attribute_id', 'value', name='uq_attribute_value'),
+    )
+
+
+class ProductVariantAttribute(TenantMixin, Base):
+    """Varyant urunun hangi oznitelik degerlerine sahip oldugu."""
+    __tablename__ = 'product_variant_attributes'
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False, index=True)
+    attribute_id = Column(Integer, ForeignKey('item_attributes.id'), nullable=False)
+    value_id = Column(Integer, ForeignKey('item_attribute_values.id'), nullable=False)
+
+    attribute = relationship('ItemAttribute')
+    value = relationship('ItemAttributeValue')
+
+    __table_args__ = (
+        UniqueConstraint('product_id', 'attribute_id', name='uq_variant_attribute'),
+    )
 
 
 # Modeller tanimlandiktan SONRA session dinleyicilerini bagla.

@@ -118,14 +118,22 @@ def top_products(
             Product.id.label('product_id'),
             Product.name.label('name'),
             Product.sku.label('sku'),
-            func.sum(SalesItem.quantity).label('quantity'),
+            # Phase 13: miktar toplami STOK BIRIMI uzerinden; kalem farkli
+            # birimde girilmis olabilir (koli satis, adet stok).
+            func.sum(
+                func.coalesce(SalesItem.stock_quantity, SalesItem.quantity)
+            ).label('quantity'),
             func.sum(SalesItem.total_price).label('revenue'),
         )
         .join(SalesItem, SalesItem.product_id == Product.id)
         .join(Sale, Sale.id == SalesItem.sale_id)
         .filter(Sale.status.in_(ACTIVE_STATUSES))
         .group_by(Product.id, Product.name, Product.sku)
-        .order_by(func.sum(SalesItem.quantity).desc())
+        .order_by(
+            func.sum(
+                func.coalesce(SalesItem.stock_quantity, SalesItem.quantity)
+            ).desc()
+        )
         .limit(limit)
         .all()
     )

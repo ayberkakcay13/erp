@@ -6,6 +6,7 @@ import Sidebar from './components/Sidebar';
 import { AlertsProvider } from './context/AlertsContext';
 import { AuthProvider } from './context/AuthContext';
 import AuditLog from './pages/AuditLog';
+import Catalog from './pages/Catalog';
 import Customers from './pages/Customers';
 import Dashboard from './pages/Dashboard';
 import Invoices from './pages/Invoices';
@@ -53,6 +54,7 @@ export default function App() {
           <Route path="/" element={<Protected><Dashboard /></Protected>} />
           <Route path="/customers" element={<Protected><Customers /></Protected>} />
           <Route path="/products" element={<Protected><Products /></Protected>} />
+          <Route path="/catalog" element={<Protected adminOnly><Catalog /></Protected>} />
           <Route path="/sales" element={<Protected><Sales /></Protected>} />
           <Route path="/sales/:id" element={<Protected><SaleDetail /></Protected>} />
           <Route path="/invoices" element={<Protected><Invoices /></Protected>} />

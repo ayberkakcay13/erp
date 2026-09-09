@@ -37,16 +37,33 @@ class ProductBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     sku: str = Field(min_length=1, max_length=50)
     price: Decimal = Field(ge=0)
+    # --- Phase 13: urun karti ---
+    stock_uom_id: Optional[int] = None
+    purchase_uom_id: Optional[int] = None
+    sales_uom_id: Optional[int] = None
+    item_group_id: Optional[int] = None
+    brand_id: Optional[int] = None
+    product_type: str = Field(default='stoklu', pattern='^(stoklu|hizmet|sarf)$')
+    is_active: bool = True
+    description: Optional[str] = None
+    image_url: Optional[str] = Field(default=None, max_length=500)
+    min_stock_level: Optional[Decimal] = Field(default=None, ge=0)
+    max_stock_level: Optional[Decimal] = Field(default=None, ge=0)
+    is_variant_template: bool = False
+    parent_product_id: Optional[int] = None
 
 
 class ProductCreate(ProductBase):
     """`stock` artik urunun kolonu degil, acilis stok hareketi (Phase 10).
 
     Verilirse `reason='acilis'` ile varsayilan (ya da secilen) depoya
-    ledger kaydi atilir.
+    ledger kaydi atilir. `stock_entry_uom_id` verilirse miktar once urunun
+    stok birimine cevrilir (Phase 13).
     """
     stock: Decimal = Field(default=Decimal('0'), ge=0)
     warehouse_id: Optional[int] = None
+    stock_entry_uom_id: Optional[int] = None
+    barcodes: List['ProductBarcodeCreate'] = Field(default_factory=list)
 
 
 class ProductUpdate(BaseModel):
@@ -56,6 +73,18 @@ class ProductUpdate(BaseModel):
     # Stok dogrudan yazilmaz; verilirse fark kadar `duzeltme` hareketi atilir.
     stock: Optional[Decimal] = Field(default=None, ge=0)
     warehouse_id: Optional[int] = None
+    stock_uom_id: Optional[int] = None
+    purchase_uom_id: Optional[int] = None
+    sales_uom_id: Optional[int] = None
+    item_group_id: Optional[int] = None
+    brand_id: Optional[int] = None
+    product_type: Optional[str] = Field(default=None, pattern='^(stoklu|hizmet|sarf)$')
+    is_active: Optional[bool] = None
+    description: Optional[str] = None
+    image_url: Optional[str] = Field(default=None, max_length=500)
+    min_stock_level: Optional[Decimal] = Field(default=None, ge=0)
+    max_stock_level: Optional[Decimal] = Field(default=None, ge=0)
+    is_variant_template: Optional[bool] = None
 
 
 class ProductResponse(ProductBase):
@@ -65,6 +94,10 @@ class ProductResponse(ProductBase):
     created_at: Optional[datetime] = None
     # Ledger toplamindan hesaplanir, tabloda kolon degildir.
     stock: Decimal = Decimal('0')
+    stock_uom_code: Optional[str] = None
+    item_group_name: Optional[str] = None
+    brand_name: Optional[str] = None
+    barcodes: List['ProductBarcodeResponse'] = []
 
 
 # ---------------- SalesItem ----------------
@@ -74,6 +107,8 @@ class SalesItemCreate(BaseModel):
     quantity: Decimal = Field(gt=0)
     unit_price: Decimal = Field(ge=0)
     warehouse_id: Optional[int] = None
+    # Phase 13: farkli birimde satis. Ledger'a yazilirken stok birimine cevrilir.
+    uom_id: Optional[int] = None
 
 
 class SalesItemResponse(BaseModel):
@@ -85,9 +120,12 @@ class SalesItemResponse(BaseModel):
     unit_price: Decimal
     total_price: Decimal
     warehouse_id: Optional[int] = None
+    uom_id: Optional[int] = None
+    stock_quantity: Optional[Decimal] = None
     product_name: Optional[str] = None
     product_sku: Optional[str] = None
     warehouse_name: Optional[str] = None
+    uom_code: Optional[str] = None
 
 
 # ---------------- Sale ----------------
@@ -415,3 +453,151 @@ class TenantResponse(TenantBase):
     is_active: bool = True
     created_at: Optional[datetime] = None
     modules: List[TenantModuleResponse] = []
+
+
+# ---------------- Phase 13: Olcu birimi, kategori, urun yapisi ----------------
+
+PRODUCT_TYPE_PATTERN = '^(stoklu|hizmet|sarf)$'
+BARCODE_TYPE_PATTERN = '^(EAN13|EAN8|CODE128|QR)$'
+
+
+class UOMBase(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=50)
+    is_integer: bool = False
+    is_active: bool = True
+
+
+class UOMCreate(UOMBase):
+    pass
+
+
+class UOMUpdate(BaseModel):
+    code: Optional[str] = Field(default=None, min_length=1, max_length=20)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    is_integer: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class UOMResponse(UOMBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    created_at: Optional[datetime] = None
+
+
+class UOMConversionCreate(BaseModel):
+    """product_id verilirse o urune ozel donusum olur ve geneli ezer."""
+    from_uom_id: int
+    to_uom_id: int
+    factor: Decimal = Field(gt=0)
+    product_id: Optional[int] = None
+
+
+class UOMConversionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    from_uom_id: int
+    to_uom_id: int
+    factor: Decimal
+    product_id: Optional[int] = None
+    from_uom_code: Optional[str] = None
+    to_uom_code: Optional[str] = None
+
+
+class ItemGroupBase(BaseModel):
+    code: str = Field(min_length=1, max_length=50)
+    name: str = Field(min_length=1, max_length=255)
+    parent_id: Optional[int] = None
+    is_active: bool = True
+
+
+class ItemGroupCreate(ItemGroupBase):
+    pass
+
+
+class ItemGroupUpdate(BaseModel):
+    code: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    parent_id: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class ItemGroupResponse(ItemGroupBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    created_at: Optional[datetime] = None
+
+
+class BrandBase(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    is_active: bool = True
+
+
+class BrandCreate(BrandBase):
+    pass
+
+
+class BrandUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    is_active: Optional[bool] = None
+
+
+class BrandResponse(BrandBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    created_at: Optional[datetime] = None
+
+
+class ProductBarcodeCreate(BaseModel):
+    barcode: str = Field(min_length=1, max_length=64)
+    barcode_type: str = Field(default='EAN13', pattern=BARCODE_TYPE_PATTERN)
+    uom_id: Optional[int] = None
+    is_primary: bool = False
+
+
+class ProductBarcodeResponse(ProductBarcodeCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    product_id: int
+
+
+class ItemAttributeValueCreate(BaseModel):
+    value: str = Field(min_length=1, max_length=100)
+    sort_order: int = 0
+
+
+class ItemAttributeValueResponse(ItemAttributeValueCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    attribute_id: int
+
+
+class ItemAttributeCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    values: List[ItemAttributeValueCreate] = Field(default_factory=list)
+
+
+class ItemAttributeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    values: List[ItemAttributeValueResponse] = []
+
+
+class GenerateVariantsRequest(BaseModel):
+    """Secilen ozniteliklerin kombinasyonundan varyant urunler uretir."""
+    attribute_ids: List[int] = Field(min_length=1)
+    value_ids: Optional[List[int]] = None
+
+
+# ProductCreate/ProductResponse, asagida tanimlanan barkod semalarina
+# atif yapiyor; ileri referanslari burada cozuyoruz.
+ProductCreate.model_rebuild()
+ProductResponse.model_rebuild()

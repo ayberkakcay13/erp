@@ -6,6 +6,7 @@ const links = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/customers', label: 'Musteriler' },
   { to: '/products', label: 'Urunler' },
+  { to: '/catalog', label: 'Katalog', adminOnly: true },
   { to: '/sales', label: 'Satislar', module: 'sales' },
   { to: '/invoices', label: 'Faturalar', module: 'invoice' },
   { to: '/stock', label: 'Stok Durumu', end: true, module: 'stock' },

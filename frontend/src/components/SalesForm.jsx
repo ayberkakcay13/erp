@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { customerAPI, productAPI, salesAPI } from '../services/api';
+import { conversionAPI, customerAPI, productAPI, salesAPI, uomAPI } from '../services/api';
 import {
   Button,
   ErrorMessage,
@@ -21,15 +21,25 @@ export default function SalesForm({ onCreated, onCancel }) {
 
   const [pickProduct, setPickProduct] = useState('');
   const [pickQty, setPickQty] = useState(1);
+  const [pickUom, setPickUom] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  // Phase 13: {id: uom} - satirlarda birim kodunu gostermek icin
+  const [uoms, setUoms] = useState({});
 
   useEffect(() => {
     (async () => {
       try {
-        const [c, p] = await Promise.all([customerAPI.getAll(), productAPI.getAll()]);
+        const [c, p, u] = await Promise.all([
+          customerAPI.getAll(),
+          productAPI.getAll(),
+          // Katalog kurulmamissa (Phase 13 oncesi) birim listesi bos kalir ve
+          // form tek birimli eski davranisiyla calismaya devam eder.
+          uomAPI.getAll({ is_active: true }).catch(() => []),
+        ]);
         setCustomers(c);
         setProducts(p);
+        setUoms(Object.fromEntries(u.map((item) => [item.id, item])));
       } catch (err) {
         setLoadError(err.message);
       } finally {
@@ -38,20 +48,54 @@ export default function SalesForm({ onCreated, onCancel }) {
     })();
   }, []);
 
+  const selected = products.find((p) => String(p.id) === String(pickProduct));
+
+  /** Urunun tanimli birimleri: satis, stok, alim (tekrarsiz). */
+  const uomChoices = useMemo(() => {
+    if (!selected) return [];
+    const ids = [selected.sales_uom_id, selected.stock_uom_id, selected.purchase_uom_id];
+    return [...new Set(ids.filter(Boolean))].map((id) => uoms[id]).filter(Boolean);
+  }, [selected, uoms]);
+
+  // Urun degisince varsayilan birim satis birimi (yoksa stok birimi) olsun
+  useEffect(() => {
+    setPickUom(selected ? String(selected.sales_uom_id ?? selected.stock_uom_id ?? '') : '');
+  }, [selected]);
+
   const total = useMemo(
     () => items.reduce((sum, i) => sum + i.quantity * i.unit_price, 0),
     [items]
   );
 
-  const addItem = () => {
+  const addItem = async () => {
     setError('');
-    const product = products.find((p) => String(p.id) === String(pickProduct));
+    const product = selected;
     const qty = Number(pickQty);
     if (!product) return setError('Once bir urun sec.');
     if (!qty || qty < 1) return setError('Miktar en az 1 olmali.');
     if (items.some((i) => i.product_id === product.id)) {
       return setError(`"${product.name}" zaten listede. Once listeden cikar.`);
     }
+
+    // Ledger her zaman stok biriminde tutulur: girilen birim farkliysa
+    // karsiligini simdiden hesapla. Donusum tanimli degilse backend 400 doner
+    // ve kullanici hatayi satisi kaydetmeden once gorur.
+    const uomId = pickUom ? Number(pickUom) : null;
+    let stockQty = qty;
+    if (uomId && product.stock_uom_id && uomId !== product.stock_uom_id) {
+      try {
+        const preview = await conversionAPI.preview({
+          quantity: String(qty),
+          from_uom_id: uomId,
+          to_uom_id: product.stock_uom_id,
+          product_id: product.id,
+        });
+        stockQty = Number(preview.converted);
+      } catch (err) {
+        return setError(err.message);
+      }
+    }
+
     setItems([
       ...items,
       {
@@ -60,6 +104,10 @@ export default function SalesForm({ onCreated, onCancel }) {
         product_sku: product.sku,
         stock: product.stock,
         quantity: qty,
+        uom_id: uomId,
+        uom_code: uomId ? uoms[uomId]?.code : null,
+        stock_quantity: stockQty,
+        stock_uom_code: product.stock_uom_id ? uoms[product.stock_uom_id]?.code : null,
         unit_price: product.price,
       },
     ]);
@@ -84,6 +132,7 @@ export default function SalesForm({ onCreated, onCancel }) {
         items: items.map((i) => ({
           product_id: i.product_id,
           quantity: i.quantity,
+          uom_id: i.uom_id,
           unit_price: i.unit_price,
         })),
       });
@@ -161,6 +210,20 @@ export default function SalesForm({ onCreated, onCancel }) {
             data-testid="pick-qty"
             className={`${inputClass} w-24`}
           />
+          {uomChoices.length > 1 && (
+            <select
+              value={pickUom}
+              onChange={(e) => setPickUom(e.target.value)}
+              data-testid="pick-uom"
+              className={`${inputClass} w-28`}
+            >
+              {uomChoices.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.code}
+                </option>
+              ))}
+            </select>
+          )}
           <Button type="button" variant="secondary" onClick={addItem} data-testid="add-item">
             Ekle
           </Button>
@@ -185,13 +248,22 @@ export default function SalesForm({ onCreated, onCancel }) {
                   <td className="px-3 py-2">
                     {i.product_name}
                     <span className="text-gray-400 text-xs ml-2 font-mono">{i.product_sku}</span>
-                    {i.quantity > i.stock && (
+                    {i.stock_quantity > i.stock && (
                       <span className="ml-2 text-xs text-red-600">
                         (stokta {i.stock} var)
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-right">{i.quantity}</td>
+                  <td className="px-3 py-2 text-right">
+                    {i.quantity}
+                    {i.uom_code && <span className="text-gray-400 ml-1">{i.uom_code}</span>}
+                    {/* Farkli birimde satis: stok karsiligi hemen gorunsun */}
+                    {i.stock_quantity !== i.quantity && (
+                      <div className="text-xs text-gray-400">
+                        = {i.stock_quantity} {i.stock_uom_code}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-right">{formatMoney(i.unit_price)}</td>
                   <td className="px-3 py-2 text-right font-medium">
                     {formatMoney(i.quantity * i.unit_price)}

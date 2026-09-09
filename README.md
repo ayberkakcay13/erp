@@ -16,6 +16,7 @@ FastAPI + React + Supabase ile çok kiracılı (multi-tenant) ERP sistemi.
 - ✅ **Stok defteri ve depo yönetimi** (Phase 10)
 - ✅ **Belge durumu, numaralandırma, denetim izi** (Phase 11)
 - ✅ **Çok kiracılı mimari + PostgreSQL RLS** (Phase 12)
+- ✅ **Ölçü birimi, kategori, marka, barkod, varyant** (Phase 13)
 
 ## Mimari notlar
 
@@ -49,6 +50,21 @@ döndürmez.
    `tests/test_phase12_tenant.py::test_pooler_set_local_sizmiyor` bunu ardışık
    ve eş zamanlı erişimle doğrular.
 
+### Ürün yapısı (Phase 13)
+Ürün kartı ölçü birimi (`stock_uom` / `purchase_uom` / `sales_uom`), kategori
+ağacı (`item_groups`), marka, barkod ve varyant taşır.
+
+**Değişmez kural:** stok defterine yazılan miktar **her zaman ürünün stok
+biriminde**dir. Koli alınıp adet satılabilir; dönüşüm ledger'a yazılmadan önce
+`app/services/uom_service.py` içinde yapılır. Satış kaleminde `quantity`
+müşterinin girdiği birimde (fiyat da o birimde), `stock_quantity` ise stok
+birimine çevrilmiş halidir — ledger `stock_quantity` kullanır.
+
+Varyant şablonu ("Tişört") stok tutmaz; stok varyantlarda ("Tişört-Kırmızı-M")
+durur. Hizmet ürünü de stok tutmaz. İkisi de
+`product_service.ensure_not_template()` ile `stock_service.add_entry()`
+içinden engellenir.
+
 ## Kurulum
 
 ### Backend
@@ -66,6 +82,7 @@ cd backend
 env\Scripts\python.exe migrate_stock_to_ledger.py     # Phase 10
 env\Scripts\python.exe migrate_phase11_documents.py   # Phase 11
 env\Scripts\python.exe migrate_phase12_tenant.py      # Phase 12
+env\Scripts\python.exe migrate_phase13_catalog.py     # Phase 13
 ```
 
 ### Frontend
@@ -87,4 +104,4 @@ Testler gerçek Supabase veritabanına karşı koşar ve oluşturdukları her ka
 temizler — production tablolarında test verisi bırakmazlar.
 
 ## Durum
-🚀 Phase 12 tamamlandı — aktif geliştirme
+🚀 Phase 13 tamamlandı — aktif geliştirme

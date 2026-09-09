@@ -83,6 +83,54 @@ export const productAPI = {
   create: (data) => unwrap(api.post('/api/products', data)),
   update: (id, data) => unwrap(api.put(`/api/products/${id}`, data)),
   delete: (id) => unwrap(api.delete(`/api/products/${id}`)),
+  // Phase 13: barkod, varyant
+  byBarcode: (barcode) =>
+    unwrap(api.get(`/api/products/by-barcode/${encodeURIComponent(barcode)}`)),
+  variants: (id) => unwrap(api.get(`/api/products/${id}/variants`)),
+  generateVariants: (id, data) =>
+    unwrap(api.post(`/api/products/${id}/generate-variants`, data)),
+  addBarcode: (id, data) => unwrap(api.post(`/api/products/${id}/barcodes`, data)),
+  deleteBarcode: (id, barcodeId) =>
+    unwrap(api.delete(`/api/products/${id}/barcodes/${barcodeId}`)),
+};
+
+// ---------------- Phase 13: urun yapisi ----------------
+
+export const uomAPI = {
+  getAll: (params) => unwrap(api.get('/api/uoms', { params })),
+  create: (data) => unwrap(api.post('/api/uoms', data)),
+  update: (id, data) => unwrap(api.put(`/api/uoms/${id}`, data)),
+  delete: (id) => unwrap(api.delete(`/api/uoms/${id}`)),
+  ensureDefaults: () => unwrap(api.post('/api/uoms/ensure-defaults')),
+};
+
+export const conversionAPI = {
+  getAll: (params) => unwrap(api.get('/api/uom-conversions', { params })),
+  create: (data) => unwrap(api.post('/api/uom-conversions', data)),
+  delete: (id) => unwrap(api.delete(`/api/uom-conversions/${id}`)),
+  preview: (params) => unwrap(api.get('/api/uom-conversions/convert', { params })),
+};
+
+export const itemGroupAPI = {
+  getAll: () => unwrap(api.get('/api/item-groups')),
+  tree: () => unwrap(api.get('/api/item-groups/tree')),
+  create: (data) => unwrap(api.post('/api/item-groups', data)),
+  update: (id, data) => unwrap(api.put(`/api/item-groups/${id}`, data)),
+  delete: (id) => unwrap(api.delete(`/api/item-groups/${id}`)),
+};
+
+export const brandAPI = {
+  getAll: () => unwrap(api.get('/api/brands')),
+  create: (data) => unwrap(api.post('/api/brands', data)),
+  update: (id, data) => unwrap(api.put(`/api/brands/${id}`, data)),
+  delete: (id) => unwrap(api.delete(`/api/brands/${id}`)),
+};
+
+export const attributeAPI = {
+  getAll: () => unwrap(api.get('/api/item-attributes')),
+  create: (data) => unwrap(api.post('/api/item-attributes', data)),
+  addValue: (id, data) => unwrap(api.post(`/api/item-attributes/${id}/values`, data)),
+  delete: (id) => unwrap(api.delete(`/api/item-attributes/${id}`)),
 };
 
 export const salesAPI = {

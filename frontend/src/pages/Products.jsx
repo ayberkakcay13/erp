@@ -12,10 +12,11 @@ import {
   PageHeader,
   formatMoney,
   formatQty,
+  inputClass,
   qty,
 } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
-import { productAPI } from '../services/api';
+import { brandAPI, itemGroupAPI, productAPI } from '../services/api';
 import { matches, sortRows, toggleSort } from '../utils/filters';
 
 const LOW_STOCK = 10;
@@ -35,6 +36,34 @@ const STOCK_OPTIONS = [
   { value: 'low', label: 'Az stok (1-9)' },
   { value: 'out', label: 'Tukendi (0)' },
 ];
+
+// Phase 13: agac yapisindaki kategoriler <select> icin girintili duz listeye
+// cevrilir; bir ust kategori secildiginde alt kategorilerin urunleri de gorunur.
+function flattenGroups(nodes, depth = 0, out = []) {
+  for (const node of nodes) {
+    out.push({ id: node.id, name: node.name, depth });
+    flattenGroups(node.children ?? [], depth + 1, out);
+  }
+  return out;
+}
+
+/** Secilen kategori ve tum alt kategorilerinin id kumesi. */
+function groupWithDescendants(nodes, targetId) {
+  for (const node of nodes) {
+    if (node.id === targetId) {
+      const ids = [];
+      const walk = (n) => {
+        ids.push(n.id);
+        (n.children ?? []).forEach(walk);
+      };
+      walk(node);
+      return new Set(ids);
+    }
+    const found = groupWithDescendants(node.children ?? [], targetId);
+    if (found) return found;
+  }
+  return null;
+}
 
 function stockGroup(stock) {
   const n = qty(stock);
@@ -60,6 +89,14 @@ export default function Products() {
   const [stockFilter, setStockFilter] = useState(searchParams.get('stock') ?? 'all');
   const [sort, setSort] = useState({ key: null, dir: 'asc' });
 
+  // Phase 13: kategori/marka filtresi ve barkod arama
+  const [groupTree, setGroupTree] = useState([]);
+  const [brands, setBrands] = useState([]);
+  const [groupFilter, setGroupFilter] = useState('all');
+  const [brandFilter, setBrandFilter] = useState('all');
+  const [barcode, setBarcode] = useState('');
+  const [barcodeHit, setBarcodeHit] = useState(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -76,6 +113,20 @@ export default function Products() {
     load();
   }, [load]);
 
+  // Katalog verisi listeden bagimsiz, bir kez yuklenir. Katalog bos olabilir
+  // (Phase 13 oncesi kurulum) - o durumda filtreler gizlenir, hata gosterilmez.
+  useEffect(() => {
+    Promise.all([itemGroupAPI.tree(), brandAPI.getAll()])
+      .then(([tree, brandList]) => {
+        setGroupTree(tree);
+        setBrands(brandList);
+      })
+      .catch(() => {
+        setGroupTree([]);
+        setBrands([]);
+      });
+  }, []);
+
   // URL'den gelen filtre degisirse (uyari panelinden gelis) state'i guncelle
   useEffect(() => {
     const fromUrl = searchParams.get('stock');
@@ -83,22 +134,64 @@ export default function Products() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  // Ust kategori secilirse alt kategorilerin urunleri de listede kalir
+  const groupIds = useMemo(
+    () =>
+      groupFilter === 'all'
+        ? null
+        : groupWithDescendants(groupTree, Number(groupFilter)),
+    [groupTree, groupFilter]
+  );
+
   const visible = useMemo(() => {
     const filtered = products.filter(
       (p) =>
         matches(p, ['name', 'sku'], search) &&
-        (stockFilter === 'all' || stockGroup(p.stock) === stockFilter)
+        (stockFilter === 'all' || stockGroup(p.stock) === stockFilter) &&
+        (groupIds === null || groupIds.has(p.item_group_id)) &&
+        (brandFilter === 'all' || p.brand_id === Number(brandFilter))
     );
     return sortRows(filtered, sort, ['price', 'stock', 'id']);
-  }, [products, search, stockFilter, sort]);
+  }, [products, search, stockFilter, groupIds, brandFilter, sort]);
 
-  const hasFilters = search.trim() !== '' || stockFilter !== 'all' || Boolean(sort.key);
+  const hasFilters =
+    search.trim() !== ''
+    || stockFilter !== 'all'
+    || groupFilter !== 'all'
+    || brandFilter !== 'all'
+    || Boolean(sort.key);
 
   const clearFilters = () => {
     setSearch('');
     setStockFilter('all');
+    setGroupFilter('all');
+    setBrandFilter('all');
     setSort({ key: null, dir: 'asc' });
     if (searchParams.get('stock')) setSearchParams({}, { replace: true });
+  };
+
+  /**
+   * Barkod okuyucu klavye emulasyonuyla calisir: okuma Enter ile biter.
+   * Bulunan urun listede tek basina gosterilsin diye arama kutusuna SKU yazilir.
+   */
+  const searchBarcode = async (event) => {
+    event.preventDefault();
+    const value = barcode.trim();
+    if (!value) return;
+    setError('');
+    setBarcodeHit(null);
+    try {
+      const hit = await productAPI.byBarcode(value);
+      setBarcodeHit(hit);
+      setSearch(hit.product.sku);
+      setStockFilter('all');
+      setGroupFilter('all');
+      setBrandFilter('all');
+    } catch {
+      setBarcodeHit({ notFound: true });
+    } finally {
+      setBarcode('');
+    }
   };
 
   const handleSaved = (saved) => {
@@ -177,7 +270,65 @@ export default function Products() {
               testid="stock-filter"
             />
           </FilterField>
+          {groupTree.length > 0 && (
+            <FilterField label="Kategori">
+              <SelectFilter
+                value={groupFilter}
+                onChange={setGroupFilter}
+                options={[
+                  { value: 'all', label: 'Tum kategoriler' },
+                  ...flattenGroups(groupTree).map((g) => ({
+                    value: String(g.id),
+                    // <option> bosluklari kirpar; girinti icin sert bosluk gerekir
+                    label: `${'  '.repeat(g.depth)}${g.name}`,
+                  })),
+                ]}
+                testid="group-filter"
+              />
+            </FilterField>
+          )}
+          {brands.length > 0 && (
+            <FilterField label="Marka">
+              <SelectFilter
+                value={brandFilter}
+                onChange={setBrandFilter}
+                options={[
+                  { value: 'all', label: 'Tum markalar' },
+                  ...brands.map((b) => ({ value: String(b.id), label: b.name })),
+                ]}
+                testid="brand-filter"
+              />
+            </FilterField>
+          )}
+          <FilterField label="Barkod">
+            <form onSubmit={searchBarcode}>
+              <input
+                type="text"
+                value={barcode}
+                onChange={(e) => setBarcode(e.target.value)}
+                placeholder="Okutun veya yazip Enter"
+                data-testid="barcode-search"
+                className={`${inputClass} min-w-[200px]`}
+              />
+            </form>
+          </FilterField>
         </FilterBar>
+      )}
+
+      {barcodeHit && (
+        <div
+          data-testid="barcode-result"
+          className={`text-sm rounded px-3 py-2 mb-4 border ${
+            barcodeHit.notFound
+              ? 'text-red-700 bg-red-50 border-red-200'
+              : 'text-indigo-700 bg-indigo-50 border-indigo-200'
+          }`}
+        >
+          {barcodeHit.notFound
+            ? 'Bu barkodla eslesen urun bulunamadi.'
+            : `Barkod: ${barcodeHit.product.name}`
+              + (barcodeHit.uom_code ? ` (${barcodeHit.uom_code})` : '')}
+        </div>
       )}
 
       {loading ? (
@@ -212,7 +363,14 @@ export default function Products() {
                         : ''
                   }`}
                 >
-                  <td className="px-4 py-2 text-gray-800">{p.name}</td>
+                  <td className="px-4 py-2 text-gray-800">
+                    {p.name}
+                    {(p.item_group_name || p.brand_name) && (
+                      <div className="text-xs text-gray-400">
+                        {[p.item_group_name, p.brand_name].filter(Boolean).join(' · ')}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-2 text-gray-500 font-mono text-xs">{p.sku}</td>
                   <td className="px-4 py-2 text-right text-gray-800">{formatMoney(p.price)}</td>
                   <td

@@ -56,13 +56,21 @@ def _require_submitted(doc) -> None:
 # ---------------- Yan etkiler ----------------
 
 def _sale_stock_entries(db: Session, sale: Sale, sign: int, user_id, note: str) -> None:
-    """Satis kalemlerini (urun, depo) kiriliminda ledger'a isler."""
+    """Satis kalemlerini (urun, depo) kiriliminda ledger'a isler.
+
+    Phase 13: ledger'a yazilan miktar HER ZAMAN urunun stok biriminde olur.
+    Kalem farkli birimde girildiyse (koli satis, adet stok) donusum satis
+    kaydedilirken `stock_quantity` alanina yazilmistir; burada o kullanilir.
+    """
     totals: dict[tuple[int, int], object] = {}
     for item in sale.items:
         wh_id = stock_service.resolve_warehouse_id(db, item.warehouse_id)
         key = (item.product_id, wh_id)
+        quantity = item.stock_quantity
+        if quantity is None:
+            quantity = item.quantity  # Phase 13 oncesi kayitlar tek birimliydi
         totals[key] = totals.get(key, stock_service.ZERO) + stock_service.to_decimal(
-            item.quantity
+            quantity
         )
 
     reason = 'satis' if sign < 0 else 'satis_iptal'
@@ -81,6 +89,7 @@ def _sale_stock_entries(db: Session, sale: Sale, sign: int, user_id, note: str) 
 
 
 def _transfer_stock_entries(db: Session, transfer: StockTransfer, sign: int, user_id, note):
+    # Transfer kalemleri zaten stok biriminde girilir
     totals: dict[int, object] = {}
     for item in transfer.items:
         totals[item.product_id] = totals.get(

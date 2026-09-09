@@ -148,7 +148,12 @@ def add_entry(
         raise HTTPException(status_code=400, detail='change_qty sifir olamaz')
 
     wh_id = resolve_warehouse_id(db, warehouse_id)
-    _lock_product(db, product_id)  # bakiye okumasi ile yazma arasinda yaris olmasin
+    product = _lock_product(db, product_id)  # bakiye okumasi ile yazma arasinda yaris olmasin
+
+    # Phase 13: sablon urun ve hizmet urunu stok tutmaz
+    from . import product_service
+
+    product_service.ensure_not_template(product)
 
     current = get_stock(db, product_id, wh_id)
     new_balance = current + change

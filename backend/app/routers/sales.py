@@ -17,7 +17,7 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import Customer, DocStatus, Product, Sale, SalesItem, User
 from ..schemas import CancelRequest, SaleCreate, SaleResponse, SaleStatusUpdate
-from ..services import document_service, stock_service
+from ..services import document_service, stock_service, uom_service
 from ..services.tenant_service import require_module
 
 router = APIRouter(
@@ -41,6 +41,7 @@ def _load_sale(db: Session, sale_id: int) -> Sale:
         .options(
             joinedload(Sale.customer),
             joinedload(Sale.items).joinedload(SalesItem.product),
+            joinedload(Sale.items).joinedload(SalesItem.uom),
         )
         .filter(Sale.id == sale_id)
         .first()
@@ -75,6 +76,9 @@ def _serialize(sale: Sale) -> dict:
                 'unit_price': item.unit_price,
                 'total_price': item.total_price,
                 'warehouse_id': item.warehouse_id,
+                'uom_id': item.uom_id,
+                'uom_code': item.uom.code if item.uom else None,
+                'stock_quantity': item.stock_quantity,
                 'product_name': item.product.name if item.product else None,
                 'product_sku': item.product.sku if item.product else None,
             }
@@ -83,8 +87,29 @@ def _serialize(sale: Sale) -> dict:
     }
 
 
+def _stock_quantity(db: Session, item) -> Decimal:
+    """Kalemin miktarini urunun STOK BIRIMINE cevirir.
+
+    Phase 13 kurali: ledger'a yazilan miktar her zaman stock_uom cinsindendir.
+    Kalem farkli birimde girildiyse (koli satis, adet stok) donusum burada olur.
+    `stock_quantity` daha once hesaplanmissa (kayitli satis kalemi) o kullanilir.
+    """
+    stored = getattr(item, 'stock_quantity', None)
+    if stored is not None:
+        return stock_service.to_decimal(stored)
+
+    quantity = stock_service.to_decimal(item.quantity)
+    uom_id = getattr(item, 'uom_id', None)
+    if uom_id is None:
+        return quantity
+    product = db.get(Product, item.product_id)
+    if product is None:
+        return quantity
+    return uom_service.to_stock_uom(db, product, quantity, uom_id)
+
+
 def _requested_by_product_warehouse(db: Session, items) -> dict:
-    """Satis kalemlerini (urun, depo) kirilimda toplar.
+    """Satis kalemlerini (urun, depo) kirilimda STOK BIRIMI cinsinden toplar.
 
     Ayni urun birden fazla satirda olabilir; stok kontrolu ve ledger hareketi
     toplam miktar uzerinden yapilir.
@@ -93,9 +118,7 @@ def _requested_by_product_warehouse(db: Session, items) -> dict:
     for item in items:
         wh_id = stock_service.resolve_warehouse_id(db, getattr(item, 'warehouse_id', None))
         key = (item.product_id, wh_id)
-        totals[key] = totals.get(key, stock_service.ZERO) + stock_service.to_decimal(
-            item.quantity
-        )
+        totals[key] = totals.get(key, stock_service.ZERO) + _stock_quantity(db, item)
     return totals
 
 
@@ -145,8 +168,10 @@ def create_sale(
     for item in payload.items:
         qty = stock_service.to_decimal(item.quantity)
         unit_price = stock_service.to_decimal(item.unit_price)
+        # Fiyat girilen birim uzerinden; miktar ise stok birimine cevrilerek saklanir
         line_total = _money(qty * unit_price)
         total += line_total
+        product = db.get(Product, item.product_id)
         sale.items.append(
             SalesItem(
                 product_id=item.product_id,
@@ -154,6 +179,8 @@ def create_sale(
                 unit_price=unit_price,
                 total_price=line_total,
                 warehouse_id=stock_service.resolve_warehouse_id(db, item.warehouse_id),
+                uom_id=item.uom_id or product.sales_uom_id or product.stock_uom_id,
+                stock_quantity=uom_service.to_stock_uom(db, product, qty, item.uom_id),
             )
         )
     sale.total_amount = _money(total)
@@ -185,6 +212,7 @@ def list_sales(
     query = db.query(Sale).options(
         joinedload(Sale.customer),
         joinedload(Sale.items).joinedload(SalesItem.product),
+        joinedload(Sale.items).joinedload(SalesItem.uom),
     )
     if customer_id is not None:
         query = query.filter(Sale.customer_id == customer_id)

@@ -34,6 +34,10 @@ TEST_ADMIN_PASSWORD = 'pytest-admin-123'
 # Silme sirasi FK bagimliliklarini takip eder (once cocuk, sonra ebeveyn)
 CLEANUP_ORDER = [
     ('audit_logs', 'id'),
+    # Phase 13 tablolari urunlerden ONCE silinmeli (FK)
+    ('product_variant_attributes', 'id'),
+    ('product_barcodes', 'id'),
+    ('uom_conversions', 'id'),
     ('stock_ledger_entries', 'id'),
     ('stock_transfer_items', 'id'),
     ('stock_transfers', 'id'),
@@ -41,8 +45,12 @@ CLEANUP_ORDER = [
     ('sales_items', 'id'),
     ('sales', 'id'),
     ('products', 'id'),
+    ('item_attribute_values', 'id'),
+    ('item_attributes', 'id'),
     ('customers', 'id'),
     ('warehouses', 'id'),
+    ('item_groups', 'id'),
+    ('brands', 'id'),
 ]
 
 
@@ -196,6 +204,14 @@ class Tracker:
                     {'p': product_id},
                 ):
                     self.add('stock_transfer_items', row[0])
+                # Phase 13: barkod, varyant ozniteligi, urune ozel donusum
+                for table in ('product_barcodes', 'product_variant_attributes',
+                              'uom_conversions'):
+                    for row in conn.execute(
+                        text(f'SELECT id FROM {table} WHERE product_id = :p'),
+                        {'p': product_id},
+                    ):
+                        self.add(table, row[0])
             for warehouse_id in self._rows.get('warehouses', set()):
                 for row in conn.execute(
                     text(
@@ -210,6 +226,13 @@ class Tracker:
                     {'w': warehouse_id},
                 ):
                     self.add('stock_ledger_entries', row[0])
+            for attribute_id in self._rows.get('item_attributes', set()):
+                for row in conn.execute(
+                    text('SELECT id FROM item_attribute_values WHERE attribute_id = :a'),
+                    {'a': attribute_id},
+                ):
+                    self.add('item_attribute_values', row[0])
+
             for transfer_id in self._rows.get('stock_transfers', set()):
                 for row in conn.execute(
                     text('SELECT id FROM stock_transfer_items WHERE transfer_id = :t'),
