@@ -17,6 +17,7 @@ FastAPI + React + Supabase ile çok kiracılı (multi-tenant) ERP sistemi.
 - ✅ **Belge durumu, numaralandırma, denetim izi** (Phase 11)
 - ✅ **Çok kiracılı mimari + PostgreSQL RLS** (Phase 12)
 - ✅ **Ölçü birimi, kategori, marka, barkod, varyant** (Phase 13)
+- ✅ **Tedarikçi ve satın alma: sipariş → mal kabul → alış faturası** (Phase 14)
 
 ## Mimari notlar
 
@@ -65,6 +66,23 @@ durur. Hizmet ürünü de stok tutmaz. İkisi de
 `product_service.ensure_not_template()` ile `stock_service.add_entry()`
 içinden engellenir.
 
+### Satın alma zinciri (Phase 14)
+Alım → stok → satış döngüsü bu fazda kapandı.
+
+**Hangi belge stok hareketi yaratır? Sadece mal kabul.** Sipariş niyet
+beyanıdır, alış faturası mali belgedir — ikisi de ledger'a dokunmaz. Bu ayrım
+ERP'nin temelidir.
+
+Mal kabul onaylandığında miktar `uom_service` ile ürünün stok birimine
+çevrilip `stock_service.add_entry(reason='alim', ref_type='purchase')` ile
+yazılır; iptalde `alim_iade` ters kaydı düşer. Aynı anda sipariş kaleminin
+`received_quantity` alanı güncellenir ve sipariş durumu (`beklemede` /
+`kismi_teslim` / `tamamlandi`) yeniden hesaplanır — bu alan senkron kalmazsa
+kısmi teslim hesabı bozulur.
+
+Ledger satırına `unit_cost` (stok birimi başına maliyet) yazılır; Phase 16'daki
+stok değerlemesi (FIFO / hareketli ortalama) buna dayanacak.
+
 ## Kurulum
 
 ### Backend
@@ -83,6 +101,7 @@ env\Scripts\python.exe migrate_stock_to_ledger.py     # Phase 10
 env\Scripts\python.exe migrate_phase11_documents.py   # Phase 11
 env\Scripts\python.exe migrate_phase12_tenant.py      # Phase 12
 env\Scripts\python.exe migrate_phase13_catalog.py     # Phase 13
+env\Scripts\python.exe migrate_phase14_purchase.py    # Phase 14
 ```
 
 ### Frontend
@@ -104,4 +123,4 @@ Testler gerçek Supabase veritabanına karşı koşar ve oluşturdukları her ka
 temizler — production tablolarında test verisi bırakmazlar.
 
 ## Durum
-🚀 Phase 13 tamamlandı — aktif geliştirme
+🚀 Phase 14 tamamlandı — aktif geliştirme

@@ -10,7 +10,13 @@ import {
   formatDate,
   formatMoney,
 } from '../components/ui';
-import { customerAPI, invoiceAPI, productAPI, salesAPI } from '../services/api';
+import {
+  customerAPI,
+  invoiceAPI,
+  productAPI,
+  reportAPI,
+  salesAPI,
+} from '../services/api';
 import { statusLabel, statusTone } from './Sales';
 
 function StatCard({ label, value, to, testid, hint }) {
@@ -43,7 +49,19 @@ export default function Dashboard() {
         salesAPI.getAll(),
         invoiceAPI.getAll(),
       ]);
+      // Satin alma modulu kapaliysa bu iki cagri 403 doner; kartlar gizlenir
+      const [pendingOrders, purchaseMonths] = await Promise.all([
+        reportAPI.pendingPurchaseOrders().catch(() => null),
+        reportAPI.purchaseSummary(1).catch(() => null),
+      ]);
       setData({
+        pendingOrders: pendingOrders ? pendingOrders.length : null,
+        overdueOrders: pendingOrders
+          ? pendingOrders.filter((o) => o.is_overdue).length
+          : 0,
+        purchaseThisMonth: purchaseMonths
+          ? Number(purchaseMonths[purchaseMonths.length - 1]?.total ?? 0)
+          : null,
         customers: customers.length,
         products: products.length,
         sales: sales.length,
@@ -92,6 +110,29 @@ export default function Dashboard() {
           hint={data.unpaidInvoices > 0 ? `${data.unpaidInvoices} tanesi odenmedi` : 'Hepsi odendi'}
         />
       </div>
+
+      {data.pendingOrders !== null && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <StatCard
+            label="Bekleyen Siparis"
+            value={data.pendingOrders}
+            to="/purchase/orders"
+            testid="stat-pending-orders"
+            hint={
+              data.overdueOrders > 0
+                ? `${data.overdueOrders} tanesi gecikmis`
+                : 'Gecikme yok'
+            }
+          />
+          <StatCard
+            label="Bu Ay Alim Tutari"
+            value={formatMoney(data.purchaseThisMonth ?? 0)}
+            to="/purchase/receipts"
+            testid="stat-purchase-month"
+            hint="Onayli mal kabuller"
+          />
+        </div>
+      )}
 
       <div className="bg-indigo-600 text-white rounded p-5 mb-6">
         <div className="text-xs uppercase tracking-wide text-indigo-200">Toplam Satis Tutari</div>

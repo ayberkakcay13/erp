@@ -12,8 +12,13 @@ import Dashboard from './pages/Dashboard';
 import Invoices from './pages/Invoices';
 import Login from './pages/Login';
 import Products from './pages/Products';
+import PurchaseInvoices from './pages/PurchaseInvoices';
+import PurchaseMatch from './pages/PurchaseMatch';
+import PurchaseOrders from './pages/PurchaseOrders';
+import PurchaseReceipts from './pages/PurchaseReceipts';
 import SaleDetail from './pages/SaleDetail';
 import Sales from './pages/Sales';
+import Suppliers from './pages/Suppliers';
 import Tenants from './pages/Tenants';
 import StockBalance from './pages/StockBalance';
 import StockLedger from './pages/StockLedger';
@@ -58,6 +63,23 @@ export default function App() {
           <Route path="/sales" element={<Protected><Sales /></Protected>} />
           <Route path="/sales/:id" element={<Protected><SaleDetail /></Protected>} />
           <Route path="/invoices" element={<Protected><Invoices /></Protected>} />
+          <Route path="/suppliers" element={<Protected><Suppliers /></Protected>} />
+          <Route
+            path="/purchase/orders"
+            element={<Protected><PurchaseOrders /></Protected>}
+          />
+          <Route
+            path="/purchase/receipts"
+            element={<Protected><PurchaseReceipts /></Protected>}
+          />
+          <Route
+            path="/purchase/invoices"
+            element={<Protected><PurchaseInvoices /></Protected>}
+          />
+          <Route
+            path="/purchase/match/:id"
+            element={<Protected><PurchaseMatch /></Protected>}
+          />
           <Route path="/stock" element={<Protected><StockBalance /></Protected>} />
           <Route path="/stock/ledger" element={<Protected><StockLedger /></Protected>} />
           <Route path="/transfers" element={<Protected><Transfers /></Protected>} />

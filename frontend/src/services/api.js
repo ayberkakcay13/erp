@@ -189,6 +189,15 @@ export const reportAPI = {
     unwrap(api.get('/api/reports/top-products', { params: { limit } })),
   revenueSummary: () => unwrap(api.get('/api/reports/revenue-summary')),
   productHistory: (id) => unwrap(api.get(`/api/reports/product/${id}/history`)),
+  purchaseSummary: (months = 6) =>
+    unwrap(api.get('/api/reports/purchase-summary', { params: { months } })),
+  supplierPerformance: () => unwrap(api.get('/api/reports/supplier-performance')),
+  pendingPurchaseOrders: () =>
+    unwrap(api.get('/api/reports/pending-purchase-orders')),
+  productPurchaseHistory: (productId) =>
+    unwrap(api.get('/api/reports/product-purchase-history', {
+      params: { product_id: productId },
+    })),
 };
 
 export const alertAPI = {
@@ -196,6 +205,8 @@ export const alertAPI = {
     unwrap(api.get('/api/alerts/low-stock', { params: threshold ? { threshold } : {} })),
   overdueInvoices: (days) =>
     unwrap(api.get('/api/alerts/overdue-invoices', { params: days ? { days } : {} })),
+  overduePurchaseOrders: () =>
+    unwrap(api.get('/api/alerts/overdue-purchase-orders')),
   summary: () => unwrap(api.get('/api/alerts/summary')),
 };
 
@@ -253,6 +264,51 @@ export const tenantAPI = {
   create: (data) => unwrap(api.post('/api/tenants', data)),
   update: (id, data) => unwrap(api.put(`/api/tenants/${id}`, data)),
   setModules: (id, modules) => unwrap(api.put(`/api/tenants/${id}/modules`, { modules })),
+};
+
+// ---------------- Phase 14: tedarikci ve satin alma ----------------
+
+export const supplierAPI = {
+  getAll: (params) => unwrap(api.get('/api/suppliers', { params })),
+  getById: (id) => unwrap(api.get(`/api/suppliers/${id}`)),
+  create: (data) => unwrap(api.post('/api/suppliers', data)),
+  update: (id, data) => unwrap(api.put(`/api/suppliers/${id}`, data)),
+  delete: (id) => unwrap(api.delete(`/api/suppliers/${id}`)),
+};
+
+export const purchaseOrderAPI = {
+  getAll: (params) => unwrap(api.get('/api/purchase-orders', { params })),
+  getById: (id) => unwrap(api.get(`/api/purchase-orders/${id}`)),
+  create: (data) => unwrap(api.post('/api/purchase-orders', data)),
+  update: (id, data) => unwrap(api.put(`/api/purchase-orders/${id}`, data)),
+  submit: (id) => unwrap(api.post(`/api/purchase-orders/${id}/submit`)),
+  cancel: (id, reason) =>
+    unwrap(api.post(`/api/purchase-orders/${id}/cancel`, { reason })),
+  delete: (id) => unwrap(api.delete(`/api/purchase-orders/${id}`)),
+  match: (id) => unwrap(api.get(`/api/purchase/match/${id}`)),
+};
+
+export const purchaseReceiptAPI = {
+  getAll: (params) => unwrap(api.get('/api/purchase-receipts', { params })),
+  getById: (id) => unwrap(api.get(`/api/purchase-receipts/${id}`)),
+  fromOrder: (orderId) =>
+    unwrap(api.get(`/api/purchase-receipts/from-order/${orderId}`)),
+  create: (data) => unwrap(api.post('/api/purchase-receipts', data)),
+  submit: (id) => unwrap(api.post(`/api/purchase-receipts/${id}/submit`)),
+  cancel: (id, reason) =>
+    unwrap(api.post(`/api/purchase-receipts/${id}/cancel`, { reason })),
+  delete: (id) => unwrap(api.delete(`/api/purchase-receipts/${id}`)),
+};
+
+export const purchaseInvoiceAPI = {
+  getAll: (params) => unwrap(api.get('/api/purchase-invoices', { params })),
+  getById: (id) => unwrap(api.get(`/api/purchase-invoices/${id}`)),
+  create: (data) => unwrap(api.post('/api/purchase-invoices', data)),
+  update: (id, data) => unwrap(api.put(`/api/purchase-invoices/${id}`, data)),
+  submit: (id) => unwrap(api.post(`/api/purchase-invoices/${id}/submit`)),
+  cancel: (id, reason) =>
+    unwrap(api.post(`/api/purchase-invoices/${id}/cancel`, { reason })),
+  delete: (id) => unwrap(api.delete(`/api/purchase-invoices/${id}`)),
 };
 
 export const userAPI = {
