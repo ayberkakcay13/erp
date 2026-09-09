@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import ChangeHistory from '../components/ChangeHistory';
+import {
+  DocStatusBadge,
+  DocumentActions,
+  isCancelled,
+  isDraft,
+} from '../components/DocStatus';
 import {
   Badge,
   Button,
@@ -8,6 +15,7 @@ import {
   PageHeader,
   formatDate,
   formatMoney,
+  formatQty,
   inputClass,
 } from '../components/ui';
 import { downloadInvoicePdf, invoiceAPI, salesAPI } from '../services/api';
@@ -21,6 +29,7 @@ export default function SaleDetail() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [tab, setTab] = useState('items');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -59,18 +68,37 @@ export default function SaleDetail() {
   const changeStatus = async (status) => {
     setBusy(true);
     setError('');
-    const wasCancelled = sale.status === 'cancelled';
     try {
       const updated = await salesAPI.updateStatus(sale.id, status);
       setSale(updated);
-      let message = `Satis durumu "${statusLabel[status] ?? status}" olarak guncellendi.`;
-      // Stok yalnizca "iptal" sinirini gecerken hareket eder
-      if (!wasCancelled && status === 'cancelled') {
-        message += ' Bu satistaki urunler stoga geri eklendi.';
-      } else if (wasCancelled && status !== 'cancelled') {
-        message += ' Bu satistaki urunler stoktan tekrar dusuldu.';
-      }
-      setNotice(message);
+      setNotice(`Satis is durumu "${statusLabel[status] ?? status}" olarak guncellendi.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Phase 11: belge yasam dongusu. Onayda stok duser, iptalde geri gelir.
+  const submitDocument = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      setSale(await salesAPI.submit(sale.id));
+      setNotice('Satis onaylandi. Urunler stoktan dusuldu; belge artik degistirilemez.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelDocument = async (reason) => {
+    setBusy(true);
+    setError('');
+    try {
+      setSale(await salesAPI.cancel(sale.id, reason));
+      setNotice('Satis iptal edildi. Urunler stoga geri eklendi.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -111,22 +139,36 @@ export default function SaleDetail() {
           <div className="text-xs uppercase text-gray-400 mb-1">Satis Bilgisi</div>
           <div className="text-sm text-gray-700">Tarih: {formatDate(sale.sale_date)}</div>
           <div className="text-sm text-gray-700 flex items-center gap-2 mt-1">
-            Durum:
+            Is durumu:
             <Badge tone={statusTone[sale.status] ?? 'gray'}>
               {statusLabel[sale.status] ?? sale.status}
             </Badge>
           </div>
+          <div className="text-sm text-gray-700 flex items-center gap-2 mt-1">
+            Belge:
+            <DocStatusBadge docstatus={sale.docstatus} testid="sale-docstatus" />
+          </div>
+          {/* Is durumu ve belge durumu ayri kavramlar: iptal edilmis belgede
+              is durumu da degistirilemez. */}
           <select
             value={sale.status}
-            disabled={busy}
+            disabled={busy || isCancelled(sale)}
             onChange={(e) => changeStatus(e.target.value)}
             data-testid="status-select"
             className={`${inputClass} mt-2`}
           >
             <option value="pending">Bekliyor</option>
             <option value="completed">Tamamlandi</option>
-            <option value="cancelled">Iptal</option>
           </select>
+          <div className="mt-3">
+            <DocumentActions
+              doc={sale}
+              busy={busy}
+              onSubmit={submitDocument}
+              onCancel={cancelDocument}
+              testidPrefix="sale"
+            />
+          </div>
         </div>
 
         <div className="bg-white border border-gray-200 rounded p-4">
@@ -137,7 +179,12 @@ export default function SaleDetail() {
           <div className="mt-3">
             {invoice ? (
               <div data-testid="invoice-info" className="text-sm">
-                <div className="text-gray-700 font-mono text-xs mb-2">{invoice.invoice_number}</div>
+                <div className="text-gray-700 font-mono text-xs mb-2">
+                  {invoice.invoice_number ?? 'taslak - numara onayda atanir'}
+                  <span className="ml-2">
+                    <DocStatusBadge docstatus={invoice.docstatus} />
+                  </span>
+                </div>
                 <Button
                   onClick={async () => {
                     setBusy(true);
@@ -162,7 +209,18 @@ export default function SaleDetail() {
                 </Link>
               </div>
             ) : (
-              <Button onClick={createInvoice} disabled={busy} data-testid="create-invoice">
+              <Button
+                onClick={createInvoice}
+                disabled={busy || isDraft(sale) || isCancelled(sale)}
+                data-testid="create-invoice"
+                title={
+                  isDraft(sale)
+                    ? 'Once satisi onaylayin'
+                    : isCancelled(sale)
+                      ? 'Iptal edilmis satis icin fatura kesilemez'
+                      : undefined
+                }
+              >
                 {busy ? 'Olusturuluyor...' : 'Fatura Olustur (KDV %20)'}
               </Button>
             )}
@@ -170,6 +228,36 @@ export default function SaleDetail() {
         </div>
       </div>
 
+      <div className="flex gap-2 border-b border-gray-200 mb-4">
+        <button
+          type="button"
+          onClick={() => setTab('items')}
+          data-testid="tab-items"
+          className={`px-3 py-1.5 text-sm border-b-2 transition-colors ${
+            tab === 'items'
+              ? 'border-indigo-600 text-indigo-700 font-medium'
+              : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          Kalemler
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('history')}
+          data-testid="tab-history"
+          className={`px-3 py-1.5 text-sm border-b-2 transition-colors ${
+            tab === 'history'
+              ? 'border-indigo-600 text-indigo-700 font-medium'
+              : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          Degisiklik Gecmisi
+        </button>
+      </div>
+
+      {tab === 'history' ? (
+        <ChangeHistory table="sales" recordId={sale.id} />
+      ) : (
       <div className="bg-white border border-gray-200 rounded overflow-x-auto">
         <table className="w-full text-sm" data-testid="sale-items">
           <thead className="bg-gray-50 text-gray-600">
@@ -186,7 +274,7 @@ export default function SaleDetail() {
               <tr key={item.id} data-testid={`sale-item-${item.id}`} className="border-t border-gray-100">
                 <td className="px-4 py-2 text-gray-800">{item.product_name ?? '-'}</td>
                 <td className="px-4 py-2 text-gray-500 font-mono text-xs">{item.product_sku ?? '-'}</td>
-                <td className="px-4 py-2 text-right">{item.quantity}</td>
+                <td className="px-4 py-2 text-right">{formatQty(item.quantity)}</td>
                 <td className="px-4 py-2 text-right">{formatMoney(item.unit_price)}</td>
                 <td className="px-4 py-2 text-right font-medium">{formatMoney(item.total_price)}</td>
               </tr>
@@ -204,6 +292,7 @@ export default function SaleDetail() {
           </tfoot>
         </table>
       </div>
+      )}
     </div>
   );
 }

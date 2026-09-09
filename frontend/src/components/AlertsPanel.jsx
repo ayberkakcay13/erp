@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAlerts } from '../context/AlertsContext';
-import { Badge, ErrorMessage, Loading, formatMoney } from './ui';
+import { Badge, ErrorMessage, Loading, formatMoney, formatQty, qty } from './ui';
 
 function AlertRow({ children, onClick, testid }) {
   return (
@@ -27,6 +27,7 @@ export default function AlertsPanel() {
 
   const low = summary.low_stock;
   const overdue = summary.overdue_invoices;
+  const latePurchase = summary.overdue_purchase_orders ?? { count: 0, items: [] };
   const hasAlerts = summary.total > 0;
 
   if (!hasAlerts) {
@@ -41,7 +42,7 @@ export default function AlertsPanel() {
             Her sey yolunda
           </div>
           <div className="text-xs text-green-700">
-            Stoklar yeterli, vadesi gecmis fatura yok.
+            Stoklar yeterli, vadesi gecmis fatura ve gecikmis siparis yok.
           </div>
         </div>
       </div>
@@ -87,7 +88,9 @@ export default function AlertsPanel() {
                     <li key={p.id} className="flex items-center gap-3 px-3 py-1.5">
                       <span className="flex-1 text-gray-700">{p.name}</span>
                       <span className="font-mono text-xs text-gray-400">{p.sku}</span>
-                      <Badge tone={p.stock === 0 ? 'red' : 'yellow'}>{p.stock} adet</Badge>
+                      <Badge tone={qty(p.stock) <= 0 ? 'red' : 'yellow'}>
+                        {formatQty(p.stock)} adet
+                      </Badge>
                     </li>
                   ))}
                 </ul>
@@ -147,6 +150,50 @@ export default function AlertsPanel() {
                   className="text-indigo-600 hover:underline text-sm mt-2"
                 >
                   Faturalar sayfasinda goster →
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {latePurchase.count > 0 && (
+          <div>
+            <AlertRow onClick={() => toggle('purchase')} testid="alert-late-purchase">
+              <Badge tone="yellow">{latePurchase.count}</Badge>
+              <span className="text-sm text-gray-800 flex-1">
+                <span data-testid="alert-late-purchase-text">
+                  {latePurchase.count} siparisin teslim tarihi gecti
+                </span>
+              </span>
+              <span className="text-xs text-gray-400">
+                {expanded === 'purchase' ? 'gizle' : 'detay'}
+              </span>
+            </AlertRow>
+            {expanded === 'purchase' && (
+              <div className="px-4 pb-3" data-testid="alert-late-purchase-detail">
+                <ul className="text-sm divide-y divide-gray-100 border border-gray-100 rounded">
+                  {latePurchase.items.slice(0, 8).map((order) => (
+                    <li key={order.id} className="flex items-center gap-3 px-3 py-1.5">
+                      <span className="font-mono text-xs text-gray-500">
+                        {order.po_number}
+                      </span>
+                      <span className="flex-1 text-gray-700">
+                        {order.supplier_name ?? '-'}
+                      </span>
+                      <span className="text-gray-600">
+                        {formatMoney(order.grand_total)}
+                      </span>
+                      <Badge tone="yellow">{order.days_late} gun</Badge>
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  type="button"
+                  onClick={() => navigate('/purchase/orders')}
+                  data-testid="alert-goto-purchase-orders"
+                  className="text-indigo-600 hover:underline text-sm mt-2"
+                >
+                  Siparisler sayfasinda goster →
                 </button>
               </div>
             )}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { DocStatusBadge } from '../components/DocStatus';
 import FilterBar, { FilterField, SearchInput, SelectFilter } from '../components/FilterBar';
 import {
   Badge,
@@ -268,7 +269,14 @@ export default function Invoices() {
             <tbody>
               {visible.map((inv) => (
                 <tr key={inv.id} data-testid={`invoice-row-${inv.id}`} className="border-t border-gray-100">
-                  <td className="px-4 py-2 font-mono text-xs text-gray-700">{inv.invoice_number}</td>
+                  <td className="px-4 py-2 font-mono text-xs text-gray-700">
+                    {inv.invoice_number ?? (
+                      <span className="text-gray-400 italic">taslak - numara yok</span>
+                    )}
+                    <span className="ml-2">
+                      <DocStatusBadge docstatus={inv.docstatus} />
+                    </span>
+                  </td>
                   <td className="px-4 py-2 text-gray-800">{customers[inv.customer_id] ?? '-'}</td>
                   <td className="px-4 py-2">
                     <Link to={`/sales/${inv.sale_id}`} className="text-indigo-600 hover:underline">

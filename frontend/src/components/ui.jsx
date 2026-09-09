@@ -93,6 +93,22 @@ export function formatMoney(value) {
   }).format(Number(value ?? 0));
 }
 
+/**
+ * Miktar bicimlendirir. Phase 10 ile miktarlar backend'de Numeric(18,4)
+ * oldugu icin "96.0000" gibi gelebiliyor; gereksiz sifirlar kirpilir.
+ */
+export function formatQty(value) {
+  const n = Number(value ?? 0);
+  if (Number.isNaN(n)) return String(value ?? '-');
+  return new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 4 }).format(n);
+}
+
+/** Miktari sayiya cevirir - karsilastirmalarda string gelme riskini kaldirir. */
+export function qty(value) {
+  const n = Number(value ?? 0);
+  return Number.isNaN(n) ? 0 : n;
+}
+
 export function formatDate(value) {
   if (!value) return '-';
   const d = new Date(value);

@@ -5,6 +5,7 @@ icin c/s/g/i gibi harfleri bozar. Bu yuzden reportlab ile birlikte gelen
 Vera (Bitstream Vera Sans) TTF fontu gomuluyor - tum Turkce karakterleri
 icerdigi dogrulandi ve ekstra bir dosyaya ihtiyac duymuyor.
 """
+from decimal import Decimal
 import os
 from datetime import timedelta
 from io import BytesIO
@@ -49,7 +50,7 @@ def _ensure_fonts():
 
 def _money(value) -> str:
     """1234.5 -> '1.234,50 TL' (Turkce bicim)"""
-    n = round(float(value or 0), 2)
+    n = Decimal(str(value or 0)).quantize(Decimal('0.01'))
     whole, frac = f'{n:,.2f}'.split('.')
     return f"{whole.replace(',', '.')},{frac} TL"
 
@@ -183,10 +184,10 @@ def build_invoice_pdf(invoice, sale, customer, items, tax_days=30) -> bytes:
     story.append(Spacer(1, 4 * mm))
 
     # --- Toplamlar ---
-    subtotal = float(sale.total_amount or 0)
-    grand_total = float(invoice.total_amount or 0)
-    tax_amount = round(grand_total - subtotal, 2)
-    tax_rate = round((tax_amount / subtotal) * 100) if subtotal else 0
+    subtotal = Decimal(str(sale.total_amount or 0))
+    grand_total = Decimal(str(invoice.total_amount or 0))
+    tax_amount = (grand_total - subtotal).quantize(Decimal('0.01'))
+    tax_rate = int((tax_amount / subtotal * 100).to_integral_value()) if subtotal else 0
 
     totals = Table(
         [

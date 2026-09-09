@@ -3,8 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
+from .auth import claims_from_token
 from .database import test_connection
-from .routers import auth, customers, invoices, products, reports, sales, users
+from .models import DocumentImmutableError, LedgerImmutableError
+from .services import audit_service, tenant_context
+from .routers import (
+    audit, auth, catalog, customers, invoices, naming_series, products,
+    purchase_invoices, purchase_orders, purchase_receipts, reports, sales,
+    stock, suppliers, tenants, transfers, users, warehouses,
+)
 
 app = FastAPI(
     title='ERP System',
@@ -28,6 +35,59 @@ app.include_router(sales.router)
 app.include_router(invoices.router)
 app.include_router(reports.router)
 app.include_router(reports.alerts_router)
+app.include_router(warehouses.router)
+app.include_router(stock.router)
+app.include_router(transfers.router)
+app.include_router(naming_series.router)
+app.include_router(audit.router)
+app.include_router(tenants.router)
+app.include_router(tenants.me_router)
+app.include_router(catalog.uom_router)
+app.include_router(catalog.conversion_router)
+app.include_router(catalog.group_router)
+app.include_router(catalog.brand_router)
+app.include_router(catalog.attribute_router)
+app.include_router(suppliers.router)
+app.include_router(purchase_orders.router)
+app.include_router(purchase_orders.match_router)
+app.include_router(purchase_receipts.router)
+app.include_router(purchase_invoices.router)
+
+
+@app.middleware('http')
+async def audit_context(request: Request, call_next):
+    """Denetim izi icin istek baglamini kurar (kullanici get_current_user'da eklenir)."""
+    client = request.headers.get('x-forwarded-for') or (
+        request.client.host if request.client else None
+    )
+    audit_service.current_ip.set(client)
+
+    # Kullanici ve tenant token'dan cozulur: get_current_user senkron oldugu
+    # icin threadpool'da kopyalanmis bir contextvar'a yazardi, buraya ulasmazdi.
+    claims = claims_from_token(request.headers.get('authorization'))
+    try:
+        user_id = int(claims['sub'])
+    except (KeyError, TypeError, ValueError):
+        user_id = None
+    audit_service.current_user_id.set(user_id)
+
+    # Phase 12: RLS politikalari bu iki degeri okur. Token yoksa tenant da
+    # yoktur ve RLS varsayilan olarak HICBIR satiri dondurmez.
+    tenant_context.current_tenant_id.set(claims.get('tenant_id'))
+    tenant_context.bypass_rls.set(bool(claims.get('is_superadmin')))
+
+    return await call_next(request)
+
+
+@app.exception_handler(DocumentImmutableError)
+def handle_document_immutable(request: Request, exc: DocumentImmutableError):
+    """Onaylanmis/iptal belgeye yazma denemesi - 400 ile net mesaj don."""
+    return JSONResponse(status_code=400, content={'detail': str(exc)})
+
+
+@app.exception_handler(LedgerImmutableError)
+def handle_ledger_immutable(request: Request, exc: LedgerImmutableError):
+    return JSONResponse(status_code=400, content={'detail': str(exc)})
 
 
 @app.exception_handler(SQLAlchemyError)

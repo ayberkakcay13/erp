@@ -83,6 +83,54 @@ export const productAPI = {
   create: (data) => unwrap(api.post('/api/products', data)),
   update: (id, data) => unwrap(api.put(`/api/products/${id}`, data)),
   delete: (id) => unwrap(api.delete(`/api/products/${id}`)),
+  // Phase 13: barkod, varyant
+  byBarcode: (barcode) =>
+    unwrap(api.get(`/api/products/by-barcode/${encodeURIComponent(barcode)}`)),
+  variants: (id) => unwrap(api.get(`/api/products/${id}/variants`)),
+  generateVariants: (id, data) =>
+    unwrap(api.post(`/api/products/${id}/generate-variants`, data)),
+  addBarcode: (id, data) => unwrap(api.post(`/api/products/${id}/barcodes`, data)),
+  deleteBarcode: (id, barcodeId) =>
+    unwrap(api.delete(`/api/products/${id}/barcodes/${barcodeId}`)),
+};
+
+// ---------------- Phase 13: urun yapisi ----------------
+
+export const uomAPI = {
+  getAll: (params) => unwrap(api.get('/api/uoms', { params })),
+  create: (data) => unwrap(api.post('/api/uoms', data)),
+  update: (id, data) => unwrap(api.put(`/api/uoms/${id}`, data)),
+  delete: (id) => unwrap(api.delete(`/api/uoms/${id}`)),
+  ensureDefaults: () => unwrap(api.post('/api/uoms/ensure-defaults')),
+};
+
+export const conversionAPI = {
+  getAll: (params) => unwrap(api.get('/api/uom-conversions', { params })),
+  create: (data) => unwrap(api.post('/api/uom-conversions', data)),
+  delete: (id) => unwrap(api.delete(`/api/uom-conversions/${id}`)),
+  preview: (params) => unwrap(api.get('/api/uom-conversions/convert', { params })),
+};
+
+export const itemGroupAPI = {
+  getAll: () => unwrap(api.get('/api/item-groups')),
+  tree: () => unwrap(api.get('/api/item-groups/tree')),
+  create: (data) => unwrap(api.post('/api/item-groups', data)),
+  update: (id, data) => unwrap(api.put(`/api/item-groups/${id}`, data)),
+  delete: (id) => unwrap(api.delete(`/api/item-groups/${id}`)),
+};
+
+export const brandAPI = {
+  getAll: () => unwrap(api.get('/api/brands')),
+  create: (data) => unwrap(api.post('/api/brands', data)),
+  update: (id, data) => unwrap(api.put(`/api/brands/${id}`, data)),
+  delete: (id) => unwrap(api.delete(`/api/brands/${id}`)),
+};
+
+export const attributeAPI = {
+  getAll: () => unwrap(api.get('/api/item-attributes')),
+  create: (data) => unwrap(api.post('/api/item-attributes', data)),
+  addValue: (id, data) => unwrap(api.post(`/api/item-attributes/${id}/values`, data)),
+  delete: (id) => unwrap(api.delete(`/api/item-attributes/${id}`)),
 };
 
 export const salesAPI = {
@@ -90,6 +138,10 @@ export const salesAPI = {
   getById: (id) => unwrap(api.get(`/api/sales/${id}`)),
   create: (data) => unwrap(api.post('/api/sales', data)),
   updateStatus: (id, status) => unwrap(api.put(`/api/sales/${id}`, { status })),
+  // Phase 11: belge yasam dongusu
+  submit: (id) => unwrap(api.post(`/api/sales/${id}/submit`)),
+  cancel: (id, reason) => unwrap(api.post(`/api/sales/${id}/cancel`, { reason })),
+  remove: (id) => unwrap(api.delete(`/api/sales/${id}`)),
 };
 
 export const invoiceAPI = {
@@ -98,6 +150,10 @@ export const invoiceAPI = {
   // Fatura her zaman bir satistan uretilir: POST /api/sales/{sale_id}/invoice
   create: (saleId, data = {}) => unwrap(api.post(`/api/sales/${saleId}/invoice`, data)),
   updateStatus: (id, status) => unwrap(api.put(`/api/invoices/${id}`, { status })),
+  // Phase 11: taslak fatura numara almaz; numara onayda atanir
+  submit: (id) => unwrap(api.post(`/api/invoices/${id}/submit`)),
+  cancel: (id, reason) => unwrap(api.post(`/api/invoices/${id}/cancel`, { reason })),
+  remove: (id) => unwrap(api.delete(`/api/invoices/${id}`)),
 };
 
 export const authAPI = {
@@ -133,6 +189,15 @@ export const reportAPI = {
     unwrap(api.get('/api/reports/top-products', { params: { limit } })),
   revenueSummary: () => unwrap(api.get('/api/reports/revenue-summary')),
   productHistory: (id) => unwrap(api.get(`/api/reports/product/${id}/history`)),
+  purchaseSummary: (months = 6) =>
+    unwrap(api.get('/api/reports/purchase-summary', { params: { months } })),
+  supplierPerformance: () => unwrap(api.get('/api/reports/supplier-performance')),
+  pendingPurchaseOrders: () =>
+    unwrap(api.get('/api/reports/pending-purchase-orders')),
+  productPurchaseHistory: (productId) =>
+    unwrap(api.get('/api/reports/product-purchase-history', {
+      params: { product_id: productId },
+    })),
 };
 
 export const alertAPI = {
@@ -140,7 +205,110 @@ export const alertAPI = {
     unwrap(api.get('/api/alerts/low-stock', { params: threshold ? { threshold } : {} })),
   overdueInvoices: (days) =>
     unwrap(api.get('/api/alerts/overdue-invoices', { params: days ? { days } : {} })),
+  overduePurchaseOrders: () =>
+    unwrap(api.get('/api/alerts/overdue-purchase-orders')),
   summary: () => unwrap(api.get('/api/alerts/summary')),
+};
+
+// ---------------- Phase 10: Depo ve stok defteri ----------------
+
+export const warehouseAPI = {
+  getAll: (params) => unwrap(api.get('/api/warehouses', { params })),
+  getById: (id) => unwrap(api.get(`/api/warehouses/${id}`)),
+  create: (data) => unwrap(api.post('/api/warehouses', data)),
+  update: (id, data) => unwrap(api.put(`/api/warehouses/${id}`, data)),
+  delete: (id) => unwrap(api.delete(`/api/warehouses/${id}`)),
+  stock: (id) => unwrap(api.get(`/api/warehouses/${id}/stock`)),
+};
+
+export const stockAPI = {
+  balance: (params) => unwrap(api.get('/api/stock/balance', { params })),
+  ledger: (params) => unwrap(api.get('/api/stock/ledger', { params })),
+  productHistory: (id, params) =>
+    unwrap(api.get(`/api/stock/product/${id}/history`, { params })),
+  adjust: (data) => unwrap(api.post('/api/stock/adjustments', data)),
+};
+
+export const transferAPI = {
+  getAll: (params) => unwrap(api.get('/api/transfers', { params })),
+  getById: (id) => unwrap(api.get(`/api/transfers/${id}`)),
+  create: (data) => unwrap(api.post('/api/transfers', data)),
+  submit: (id) => unwrap(api.post(`/api/transfers/${id}/submit`)),
+  cancel: (id, reason) => unwrap(api.post(`/api/transfers/${id}/cancel`, { reason })),
+};
+
+// ---------------- Phase 11: denetim izi ve numaralandirma ----------------
+
+export const auditAPI = {
+  list: (params) => unwrap(api.get('/api/audit-log', { params })),
+  tables: () => unwrap(api.get('/api/audit-log/tables')),
+  recordHistory: (table, recordId) =>
+    unwrap(api.get(`/api/audit-log/${table}/${recordId}`)),
+};
+
+export const namingSeriesAPI = {
+  getAll: (params) => unwrap(api.get('/api/naming-series', { params })),
+  currentYear: () => unwrap(api.get('/api/naming-series/current-year')),
+  update: (id, data) => unwrap(api.put(`/api/naming-series/${id}`, data)),
+};
+
+// ---------------- Phase 12: cok kiracili mimari ----------------
+
+export const tenantAPI = {
+  // Kullanicinin kendi firmasi
+  me: () => unwrap(api.get('/api/tenant')),
+  myModules: () => unwrap(api.get('/api/tenant/modules')),
+  // Platform sahibi (superadmin)
+  getAll: () => unwrap(api.get('/api/tenants')),
+  getById: (id) => unwrap(api.get(`/api/tenants/${id}`)),
+  create: (data) => unwrap(api.post('/api/tenants', data)),
+  update: (id, data) => unwrap(api.put(`/api/tenants/${id}`, data)),
+  setModules: (id, modules) => unwrap(api.put(`/api/tenants/${id}/modules`, { modules })),
+};
+
+// ---------------- Phase 14: tedarikci ve satin alma ----------------
+
+export const supplierAPI = {
+  getAll: (params) => unwrap(api.get('/api/suppliers', { params })),
+  getById: (id) => unwrap(api.get(`/api/suppliers/${id}`)),
+  create: (data) => unwrap(api.post('/api/suppliers', data)),
+  update: (id, data) => unwrap(api.put(`/api/suppliers/${id}`, data)),
+  delete: (id) => unwrap(api.delete(`/api/suppliers/${id}`)),
+};
+
+export const purchaseOrderAPI = {
+  getAll: (params) => unwrap(api.get('/api/purchase-orders', { params })),
+  getById: (id) => unwrap(api.get(`/api/purchase-orders/${id}`)),
+  create: (data) => unwrap(api.post('/api/purchase-orders', data)),
+  update: (id, data) => unwrap(api.put(`/api/purchase-orders/${id}`, data)),
+  submit: (id) => unwrap(api.post(`/api/purchase-orders/${id}/submit`)),
+  cancel: (id, reason) =>
+    unwrap(api.post(`/api/purchase-orders/${id}/cancel`, { reason })),
+  delete: (id) => unwrap(api.delete(`/api/purchase-orders/${id}`)),
+  match: (id) => unwrap(api.get(`/api/purchase/match/${id}`)),
+};
+
+export const purchaseReceiptAPI = {
+  getAll: (params) => unwrap(api.get('/api/purchase-receipts', { params })),
+  getById: (id) => unwrap(api.get(`/api/purchase-receipts/${id}`)),
+  fromOrder: (orderId) =>
+    unwrap(api.get(`/api/purchase-receipts/from-order/${orderId}`)),
+  create: (data) => unwrap(api.post('/api/purchase-receipts', data)),
+  submit: (id) => unwrap(api.post(`/api/purchase-receipts/${id}/submit`)),
+  cancel: (id, reason) =>
+    unwrap(api.post(`/api/purchase-receipts/${id}/cancel`, { reason })),
+  delete: (id) => unwrap(api.delete(`/api/purchase-receipts/${id}`)),
+};
+
+export const purchaseInvoiceAPI = {
+  getAll: (params) => unwrap(api.get('/api/purchase-invoices', { params })),
+  getById: (id) => unwrap(api.get(`/api/purchase-invoices/${id}`)),
+  create: (data) => unwrap(api.post('/api/purchase-invoices', data)),
+  update: (id, data) => unwrap(api.put(`/api/purchase-invoices/${id}`, data)),
+  submit: (id) => unwrap(api.post(`/api/purchase-invoices/${id}/submit`)),
+  cancel: (id, reason) =>
+    unwrap(api.post(`/api/purchase-invoices/${id}/cancel`, { reason })),
+  delete: (id) => unwrap(api.delete(`/api/purchase-invoices/${id}`)),
 };
 
 export const userAPI = {

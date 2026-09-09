@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { authAPI, setAuthToken, setUnauthorizedHandler } from '../services/api';
+import { authAPI, setAuthToken, setUnauthorizedHandler, tenantAPI } from '../services/api';
 
 const AuthContext = createContext(null);
 
@@ -19,6 +19,8 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY));
   const [user, setUser] = useState(readStoredUser);
   const [loading, setLoading] = useState(Boolean(localStorage.getItem(TOKEN_KEY)));
+  // Phase 12: bu firmada acik olan moduller. Menu ve sayfalar buna gore kurulur.
+  const [modules, setModules] = useState([]);
 
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
@@ -26,6 +28,7 @@ export function AuthProvider({ children }) {
     setAuthToken(null);
     setToken(null);
     setUser(null);
+    setModules([]);
     setLoading(false);
   }, []);
 
@@ -49,6 +52,10 @@ export function AuthProvider({ children }) {
         if (cancelled) return;
         setUser(fresh);
         localStorage.setItem(USER_KEY, JSON.stringify(fresh));
+        // Modul listesi oturumla birlikte tazelenir; kapali modul menude cikmaz
+        return tenantAPI.myModules().then((data) => {
+          if (!cancelled) setModules(data.enabled ?? []);
+        });
       })
       .catch(() => {
         if (!cancelled) logout();
@@ -69,6 +76,12 @@ export function AuthProvider({ children }) {
     setAuthToken(data.access_token);
     setToken(data.access_token);
     setUser(data.user);
+    try {
+      const info = await tenantAPI.myModules();
+      setModules(info.enabled ?? []);
+    } catch {
+      setModules([]); // modul bilgisi alinamazsa menu en dar haliyle acilir
+    }
     return data.user;
   }, []);
 
@@ -80,8 +93,11 @@ export function AuthProvider({ children }) {
       login,
       logout,
       isAdmin: user?.role === 'admin',
+      isSuperadmin: Boolean(user?.is_superadmin),
+      modules,
+      hasModule: (code) => modules.length === 0 || modules.includes(code),
     }),
-    [user, token, loading, login, logout]
+    [user, token, loading, login, logout, modules]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
