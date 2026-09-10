@@ -73,7 +73,27 @@ POLICY_EXPRESSION = (
 APP_DB_ROLE = 'erp_app'
 
 
+# Phase 15: `sales_items` -> `sales_order_items` olarak yeniden adlandirildi.
+# Bu migration'in idempotency testi hala gecerli olsun diye eski ad gercek
+# (guncel) tablo adina cozulur.
+RENAMED_TABLES = {'sales_items': 'sales_order_items'}
+
+
+def table_exists(conn, table: str) -> bool:
+    return conn.execute(
+        text("SELECT 1 FROM information_schema.tables WHERE table_name = :t"),
+        {'t': table},
+    ).first() is not None
+
+
+def resolve_table(conn, table: str) -> str:
+    if not table_exists(conn, table) and table in RENAMED_TABLES:
+        return RENAMED_TABLES[table]
+    return table
+
+
 def column_exists(conn, table: str, column: str) -> bool:
+    table = resolve_table(conn, table)
     return conn.execute(
         text(
             'SELECT 1 FROM information_schema.columns '
@@ -115,17 +135,20 @@ def main() -> None:
             added.append(column)
         print(f'  {"eklendi -> " + ", ".join(added) if added else "zaten var"}')
 
-        step(3, 'sales_items birim kolonlari')
+        sales_items_table = resolve_table(conn, 'sales_items')
+        step(3, f'{sales_items_table} birim kolonlari')
         added = []
         for column, ddl in SALES_ITEM_COLUMNS:
             if column_exists(conn, 'sales_items', column):
                 continue
-            conn.execute(text(f'ALTER TABLE sales_items ADD COLUMN {column} {ddl}'))
+            conn.execute(
+                text(f'ALTER TABLE {sales_items_table} ADD COLUMN {column} {ddl}')
+            )
             added.append(column)
         print(f'  {"eklendi -> " + ", ".join(added) if added else "zaten var"}')
         # Eski kalemler tek birimliydi: stok miktari = girilen miktar
         filled = conn.execute(text(
-            'UPDATE sales_items SET stock_quantity = quantity '
+            f'UPDATE {sales_items_table} SET stock_quantity = quantity '
             'WHERE stock_quantity IS NULL'
         )).rowcount
         print(f'  {filled} eski kalemde stock_quantity dolduruldu')

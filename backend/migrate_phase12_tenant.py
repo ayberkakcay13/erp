@@ -45,6 +45,25 @@ TENANT_TABLES = [
 # tenant_id NOT NULL yapilmayacaklar: superadmin hicbir firmaya bagli degildir
 NULLABLE_TENANT_TABLES = {'users'}
 
+# Phase 15: `sales`/`sales_items` -> `sales_orders`/`sales_order_items` olarak
+# yeniden adlandirildi. Bu migration'in idempotency testi (iki kez
+# calistirilinca bozulmamali) ve RLS dogrulama testi hala gecerli olsun diye
+# eski adlar gercek (guncel) tablo adina cozulur.
+RENAMED_TABLES = {'sales': 'sales_orders', 'sales_items': 'sales_order_items'}
+
+
+def table_exists(conn, table: str) -> bool:
+    return conn.execute(
+        text("SELECT 1 FROM information_schema.tables WHERE table_name = :t"),
+        {'t': table},
+    ).first() is not None
+
+
+def resolve_table(conn, table: str) -> str:
+    if not table_exists(conn, table) and table in RENAMED_TABLES:
+        return RENAMED_TABLES[table]
+    return table
+
 # (tablo, eski global kisit adi, yeni kisit adi, kolonlar)
 UNIQUE_MIGRATIONS = [
     ('products', 'products_sku_key', 'uq_products_tenant_sku', 'tenant_id, sku'),
@@ -106,8 +125,12 @@ def main() -> None:
         # baglantiyi havuza geri verdiginde muafiyet sonraki kiraciya sizar.
         conn.execute(text("SELECT set_config('app.bypass_rls', 'on', true)"))
 
+        # Phase 15 sonrasi yeniden calistirmalarda 'sales'/'sales_items'
+        # guncel adlarina (sales_orders/sales_order_items) cozulur.
+        tenant_tables = [resolve_table(conn, t) for t in TENANT_TABLES]
+
         step(2, 'tenant_id kolonlari')
-        for table in TENANT_TABLES:
+        for table in tenant_tables:
             if column_exists(conn, table, 'tenant_id'):
                 print(f'  {table}: zaten var')
                 continue
@@ -117,7 +140,7 @@ def main() -> None:
                 'FOREIGN KEY (tenant_id) REFERENCES tenants(id)'
             ))
             print(f'  {table}: eklendi')
-        for table in TENANT_TABLES:
+        for table in tenant_tables:
             conn.execute(text(
                 f'CREATE INDEX IF NOT EXISTS ix_{table}_tenant_id '
                 f'ON {table} (tenant_id)'
@@ -163,7 +186,7 @@ def main() -> None:
             )
 
         moved = 0
-        for table in TENANT_TABLES:
+        for table in tenant_tables:
             moved += conn.execute(
                 text(f'UPDATE {table} SET tenant_id = :t WHERE tenant_id IS NULL'),
                 {'t': tenant_id},
@@ -179,7 +202,7 @@ def main() -> None:
         print(f'  {promoted} kullanici platform sahibi olarak isaretlendi')
 
         step(5, 'tenant_id NOT NULL')
-        for table in TENANT_TABLES:
+        for table in tenant_tables:
             if table in NULLABLE_TENANT_TABLES:
                 print(f'  {table}: bilerek nullable (superadmin tenant\'siz olabilir)')
                 continue
@@ -251,7 +274,7 @@ def main() -> None:
         print(f'  {APP_DB_ROLE} hazir (bypassrls={bypasses})')
 
         step(8, 'Row Level Security politikalari')
-        for table in TENANT_TABLES:
+        for table in tenant_tables:
             conn.execute(text(f'ALTER TABLE {table} ENABLE ROW LEVEL SECURITY'))
             # FORCE olmadan politikalar tablo sahibi icin (uygulamanin baglandigi
             # postgres rolu) hic calismazdi.
@@ -264,7 +287,7 @@ def main() -> None:
             print(f'  {table}: RLS acik + FORCE + {POLICY_NAME}')
 
         step(9, 'Dogrulama')
-        for table in TENANT_TABLES:
+        for table in tenant_tables:
             # Sema filtresi sart: Supabase'de ayrica bir `auth.users` tablosu
             # var, filtresiz sorgu yanlis satiri getiriyor.
             enabled, forced = conn.execute(

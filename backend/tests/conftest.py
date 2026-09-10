@@ -31,6 +31,18 @@ from app.main import app  # noqa: E402
 TEST_ADMIN_EMAIL = 'pytest-admin@erptest.com'
 TEST_ADMIN_PASSWORD = 'pytest-admin-123'
 
+# Phase 15: `sales`/`sales_items` tablolari `sales_orders`/`sales_order_items`
+# olarak yeniden adlandirildi. Testler (Phase 10-14) hala eski adla
+# `tracker.add('sales', ...)` cagiriyor - Tracker'in mantiksal anahtari
+# ('sales') SABIT kalir, yalnizca SQL'de kullanilan GERCEK tablo adi
+# bu haritadan cozulur. Boylece ~30 test call site'i degismeden calisir.
+REAL_TABLE = {'sales': 'sales_orders', 'sales_items': 'sales_order_items'}
+
+
+def _real_table(name: str) -> str:
+    return REAL_TABLE.get(name, name)
+
+
 # Silme sirasi FK bagimliliklarini takip eder (once cocuk, sonra ebeveyn)
 CLEANUP_ORDER = [
     ('audit_logs', 'id'),
@@ -48,9 +60,16 @@ CLEANUP_ORDER = [
     ('stock_ledger_entries', 'id'),
     ('stock_transfer_items', 'id'),
     ('stock_transfers', 'id'),
+    # Phase 15: fatura kalemi -> fatura -> sevkiyat kalemi -> sevkiyat ->
+    # siparis kalemi -> siparis -> teklif kalemi -> teklif (FK sirasi)
+    ('invoice_items', 'id'),
     ('invoices', 'id'),
+    ('delivery_note_items', 'id'),
+    ('delivery_notes', 'id'),
     ('sales_items', 'id'),
     ('sales', 'id'),
+    ('quotation_items', 'id'),
+    ('quotations', 'id'),
     ('products', 'id'),
     ('item_attribute_values', 'id'),
     ('item_attributes', 'id'),
@@ -138,11 +157,19 @@ def admin_user():
                 {'i': user_id},
             )
             for column in ('submitted_by', 'cancelled_by'):
-                for table in ('sales', 'invoices', 'stock_transfers'):
+                for table in (
+                    'sales_orders', 'invoices', 'stock_transfers',
+                    'delivery_notes', 'quotations',
+                ):
                     conn.execute(
                         text(f'UPDATE {table} SET {column} = NULL WHERE {column} = :i'),
                         {'i': user_id},
                     )
+            for table in ('sales_orders', 'delivery_notes', 'quotations'):
+                conn.execute(
+                    text(f'UPDATE {table} SET created_by = NULL WHERE created_by = :i'),
+                    {'i': user_id},
+                )
             conn.execute(
                 text('DELETE FROM audit_logs WHERE user_id = :i'), {'i': user_id}
             )
@@ -198,9 +225,46 @@ class Tracker:
                 ):
                     self.add('invoices', row[0])
                 for row in conn.execute(
-                    text('SELECT id FROM sales_items WHERE sale_id = :s'), {'s': sale_id}
+                    text(
+                        'SELECT id FROM sales_order_items WHERE sales_order_id = :s'
+                    ), {'s': sale_id}
                 ):
                     self.add('sales_items', row[0])
+                # Phase 15: sale'i sevk eden irsaliye(ler) - uyum katmani
+                # /api/sales her onayda otomatik bir DeliveryNote acar
+                for row in conn.execute(
+                    text('SELECT id FROM delivery_notes WHERE sales_order_id = :s'),
+                    {'s': sale_id},
+                ):
+                    self.add('delivery_notes', row[0])
+            for invoice_id in self._rows.get('invoices', set()):
+                for row in conn.execute(
+                    text('SELECT id FROM invoice_items WHERE invoice_id = :i'),
+                    {'i': invoice_id},
+                ):
+                    self.add('invoice_items', row[0])
+            for delivery_note_id in self._rows.get('delivery_notes', set()):
+                for row in conn.execute(
+                    text(
+                        'SELECT id FROM delivery_note_items WHERE delivery_note_id = :d'
+                    ),
+                    {'d': delivery_note_id},
+                ):
+                    self.add('delivery_note_items', row[0])
+                for row in conn.execute(
+                    text(
+                        "SELECT id FROM stock_ledger_entries "
+                        "WHERE ref_type = 'delivery' AND ref_id = :d"
+                    ),
+                    {'d': delivery_note_id},
+                ):
+                    self.add('stock_ledger_entries', row[0])
+            for quotation_id in self._rows.get('quotations', set()):
+                for row in conn.execute(
+                    text('SELECT id FROM quotation_items WHERE quotation_id = :q'),
+                    {'q': quotation_id},
+                ):
+                    self.add('quotation_items', row[0])
             for product_id in self._rows.get('products', set()):
                 for row in conn.execute(
                     text('SELECT id FROM stock_ledger_entries WHERE product_id = :p'),
@@ -278,10 +342,13 @@ class Tracker:
                     self.add('stock_transfer_items', row[0])
 
             # Phase 11: takip edilen kayitlarin denetim izi satirlari da silinir
+            # log_table degeri audit_logs.table_name'de FIILEN yazan degerdir
+            # (Phase 15 migration'i 'sales'/'sales_items' gecmis kayitlarini
+            # 'sales_orders'/'sales_order_items' olarak guncelledi).
             audited = {
-                'sales': 'sales', 'products': 'products', 'customers': 'customers',
+                'sales': 'sales_orders', 'products': 'products', 'customers': 'customers',
                 'invoices': 'invoices', 'warehouses': 'warehouses',
-                'stock_transfers': 'stock_transfers', 'sales_items': 'sales_items',
+                'stock_transfers': 'stock_transfers', 'sales_items': 'sales_order_items',
                 'stock_transfer_items': 'stock_transfer_items',
                 'suppliers': 'suppliers', 'purchase_orders': 'purchase_orders',
                 'purchase_order_items': 'purchase_order_items',
@@ -289,6 +356,9 @@ class Tracker:
                 'purchase_receipt_items': 'purchase_receipt_items',
                 'purchase_invoices': 'purchase_invoices',
                 'purchase_invoice_items': 'purchase_invoice_items',
+                'delivery_notes': 'delivery_notes',
+                'delivery_note_items': 'delivery_note_items',
+                'quotations': 'quotations', 'quotation_items': 'quotation_items',
             }
             for table, log_table in audited.items():
                 ids = self._rows.get(table)
@@ -308,7 +378,7 @@ class Tracker:
                 if not ids:
                     continue
                 conn.execute(
-                    text(f'DELETE FROM {table} WHERE {pk} = ANY(:ids)'),
+                    text(f'DELETE FROM {_real_table(table)} WHERE {pk} = ANY(:ids)'),
                     {'ids': list(ids)},
                 )
         self._rows.clear()

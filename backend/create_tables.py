@@ -9,9 +9,12 @@ from app.database import Base, engine
 from app import models  # noqa: F401  -- modellerin Base'e kaydolmasi icin gerekli
 
 EXPECTED = [
-    'customers', 'products', 'sales', 'sales_items', 'invoices', 'users',
+    'customers', 'products', 'sales_orders', 'sales_order_items', 'invoices', 'users',
     # Phase 10
     'warehouses', 'stock_ledger_entries', 'stock_transfers', 'stock_transfer_items',
+    # Phase 15
+    'quotations', 'quotation_items', 'delivery_notes', 'delivery_note_items',
+    'invoice_items',
 ]
 
 print('Tablolar olusturuluyor...')

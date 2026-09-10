@@ -17,12 +17,14 @@ from sqlalchemy.orm import Session
 # doc_type -> (prefix, varsayilan padding)
 DEFAULT_SERIES = {
     'invoice': ('FT', 5),          # fatura
-    'sale': ('ST', 5),             # satis
+    'sale': ('ST', 5),             # satis (eski, artik kullanilmiyor)
     'delivery_note': ('IR', 5),    # irsaliye
     'transfer': ('TR', 5),         # depo transferi
     'purchase_order': ('SAS', 5),    # satin alma siparisi
     'purchase_receipt': ('MK', 5),
     'purchase_invoice': ('AF', 5),
+    'quotation': ('QT', 5),         # Phase 15: teklif
+    'sales_order': ('SO', 5),       # Phase 15: satis siparisi
 }
 
 

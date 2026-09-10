@@ -1,10 +1,17 @@
-"""Sales endpointleri. Satis olustururken items'tan total_amount hesaplanir.
+"""Sales endpointleri - Phase 15 UYUM KATMANI.
 
-Phase 10: stok artik `products.stock` kolonuna yazilmiyor. Her satis
-`stock_service.add_entry()` ile stok defterine hareket yazar:
-  - satis olusturma  -> change_qty = -qty, reason='satis'
-  - satis iptali     -> change_qty = +qty, reason='satis_iptal'
-Ledger satirlari asla silinmez; iptal de bir hareket olarak kaydedilir.
+`/api/sales` artik kaputun altinda SalesOrder + otomatik DeliveryNote
+acar; eski davranisi (onay = stok dususu) korumak icin sale onaylanir
+onaylanmaz TUM kalemleri kapsayan bir sevkiyat da acilip onaylanir. Yanit
+sekli DEGISMEZ - Phase 10-14 testleri ve mevcut frontend bu router'a hic
+dokunmadan calismaya devam eder.
+
+Yeni gelistirme icin `routers/quotations.py`, `routers/sales_orders.py` ve
+`routers/delivery_notes.py` kullanilmali; bu dosya yalniz geriye uyum icindir.
+
+Stok hareketi zinciri (Phase 15):
+  SalesOrder onayi -> stok hareketi YOK (niyet beyani)
+  DeliveryNote onayi -> stok hareketi (reason='satis', ref_type='delivery')
 """
 from datetime import date
 from decimal import Decimal
@@ -15,9 +22,9 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Customer, DocStatus, Product, Sale, SalesItem, User
+from ..models import Customer, DeliveryNote, DeliveryNoteItem, DocStatus, Product, Sale, SalesItem, User
 from ..schemas import CancelRequest, SaleCreate, SaleResponse, SaleStatusUpdate
-from ..services import document_service, stock_service, uom_service
+from ..services import credit_service, document_service, stock_service, uom_service
 from ..services.tenant_service import require_module
 
 router = APIRouter(
@@ -51,12 +58,14 @@ def _load_sale(db: Session, sale_id: int) -> Sale:
     return sale
 
 
-def _serialize(sale: Sale) -> dict:
+def _serialize(sale: Sale, credit_warning: dict | None = None) -> dict:
     """Detayli response: musteri bilgisi + tum item'lar + urun isimleri."""
     return {
         'id': sale.id,
         'customer_id': sale.customer_id,
         'sale_date': sale.sale_date,
+        'so_number': sale.so_number,
+        'warehouse_id': sale.warehouse_id,
         'total_amount': sale.total_amount,
         'status': sale.status,
         'docstatus': sale.docstatus,
@@ -74,16 +83,19 @@ def _serialize(sale: Sale) -> dict:
                 'product_id': item.product_id,
                 'quantity': item.quantity,
                 'unit_price': item.unit_price,
+                'tax_rate': item.tax_rate,
                 'total_price': item.total_price,
                 'warehouse_id': item.warehouse_id,
                 'uom_id': item.uom_id,
                 'uom_code': item.uom.code if item.uom else None,
                 'stock_quantity': item.stock_quantity,
+                'delivered_quantity': item.delivered_quantity,
                 'product_name': item.product.name if item.product else None,
                 'product_sku': item.product.sku if item.product else None,
             }
             for item in sale.items
         ],
+        'credit_warning': credit_warning,
     }
 
 
@@ -120,6 +132,54 @@ def _requested_by_product_warehouse(db: Session, items) -> dict:
         key = (item.product_id, wh_id)
         totals[key] = totals.get(key, stock_service.ZERO) + _stock_quantity(db, item)
     return totals
+
+
+def _build_and_submit_delivery_note(db: Session, sale: Sale, user_id) -> DeliveryNote:
+    """Uyum katmani: sale onaylanirken TUM kalemleri kapsayan bir sevkiyat acar.
+
+    Stok hareketi burada, DeliveryNote onayinda olusur (Phase 15 kurali).
+    Eski davranis (Sale onayinda aninda stok dususu) disaridan ayni gorunur.
+    """
+    delivery_note = DeliveryNote(
+        sales_order_id=sale.id,
+        customer_id=sale.customer_id,
+        warehouse_id=sale.warehouse_id,
+        delivery_date=sale.sale_date or date.today(),
+        note='Otomatik sevkiyat (uyum katmani /api/sales)',
+        created_by=user_id,
+    )
+    for item in sale.items:
+        delivery_note.items.append(
+            DeliveryNoteItem(
+                sales_order_item_id=item.id,
+                product_id=item.product_id,
+                uom_id=item.uom_id,
+                warehouse_id=item.warehouse_id,
+                quantity=item.quantity,
+                unit_price=item.unit_price,
+                stock_quantity=item.stock_quantity,
+            )
+        )
+    db.add(delivery_note)
+    db.flush()
+    document_service.submit(db, delivery_note, user_id=user_id)
+    return delivery_note
+
+
+def _cancel_linked_delivery_notes(db: Session, sale: Sale, user_id) -> None:
+    """Sale iptal edilmeden once, onu sevk eden tum irsaliyeleri iptal eder."""
+    notes = (
+        db.query(DeliveryNote)
+        .filter(
+            DeliveryNote.sales_order_id == sale.id,
+            DeliveryNote.docstatus == DocStatus.SUBMITTED,
+        )
+        .all()
+    )
+    for note in notes:
+        document_service.cancel(
+            db, note, user_id=user_id, reason='Bagli satis iptal edildi'
+        )
 
 
 @router.post('', response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
@@ -160,6 +220,7 @@ def create_sale(
     sale = Sale(
         customer_id=payload.customer_id,
         sale_date=payload.sale_date or date.today(),
+        warehouse_id=payload.warehouse_id,
         total_amount=stock_service.ZERO,
         status='pending',
     )
@@ -177,6 +238,7 @@ def create_sale(
                 product_id=item.product_id,
                 quantity=qty,
                 unit_price=unit_price,
+                tax_rate=item.tax_rate,
                 total_price=line_total,
                 warehouse_id=stock_service.resolve_warehouse_id(db, item.warehouse_id),
                 uom_id=item.uom_id or product.sales_uom_id or product.stock_uom_id,
@@ -188,10 +250,19 @@ def create_sale(
     db.add(sale)
     db.flush()  # sale.id ledger ref_id olarak lazim
 
-    # Phase 11: stok hareketi artik ONAY aninda, document_service uzerinden olusur.
+    credit_warning = None
+    # Phase 11: belge onayi artik document_service uzerinden olusur.
     # Varsayilan davranis "olustur ve onayla" - save_as_draft=true ile taslak kalir.
     if not payload.save_as_draft:
+        check = credit_service.check_credit(
+            db, sale.customer_id, sale.total_amount,
+            block_if_exceeded=payload.block_if_credit_exceeded,
+        )
+        if not check['allowed']:
+            credit_warning = check
         document_service.submit(db, sale, user_id=current_user.id)
+        # Phase 15: stok hareketi SalesOrder degil, DeliveryNote onayinda olusur.
+        _build_and_submit_delivery_note(db, sale, current_user.id)
 
     try:
         db.commit()
@@ -199,7 +270,7 @@ def create_sale(
         db.rollback()
         raise HTTPException(status_code=500, detail=f'Satis kaydedilemedi: {exc}')
 
-    return _serialize(_load_sale(db, sale.id))
+    return _serialize(_load_sale(db, sale.id), credit_warning)
 
 
 @router.get('', response_model=list[SaleResponse])
@@ -240,9 +311,10 @@ def update_sale_status(
     - `docstatus` belge yasam dongusu (taslak / onayli / iptal)
 
     "cancelled" gonderilmesi belgeyi iptal eder; iptal `document_service`
-    uzerinden gecer ve stok ters kaydi orada olusur. Iptal edilmis bir belge
-    TEKRAR ONAYLANAMAZ - duzeltme icin yeni satis olusturulur. (Bu kural
-    Phase 4/10'daki "iptali geri al" davranisinin yerini alir.)
+    uzerinden gecer ve bagli sevkiyat(lar) once iptal edilerek stok geri
+    alinir. Iptal edilmis bir belge TEKRAR ONAYLANAMAZ - duzeltme icin yeni
+    satis olusturulur. (Bu kural Phase 4/10'daki "iptali geri al"
+    davranisinin yerini alir.)
     """
     sale = _load_sale(db, sale_id)
     new_status = payload.status
@@ -255,6 +327,7 @@ def update_sale_status(
                 status_code=400,
                 detail='Taslak satis iptal edilemez, silinebilir',
             )
+        _cancel_linked_delivery_notes(db, sale, current_user.id)
         document_service.cancel(db, sale, user_id=current_user.id)
         sale.status = 'cancelled'
     else:
@@ -282,15 +355,17 @@ def submit_sale(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Taslak satisi onaylar: stok hareketi bu anda olusur."""
+    """Taslak satisi onaylar: stok hareketi bu anda (sevkiyat uzerinden) olusur."""
     sale = _load_sale(db, sale_id)
+    check = credit_service.check_credit(db, sale.customer_id, sale.total_amount)
     document_service.submit(db, sale, user_id=current_user.id)
+    _build_and_submit_delivery_note(db, sale, current_user.id)
     try:
         db.commit()
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f'Satis onaylanamadi: {exc}')
-    return _serialize(_load_sale(db, sale_id))
+    return _serialize(_load_sale(db, sale_id), None if check['allowed'] else check)
 
 
 @router.post('/{sale_id}/cancel', response_model=SaleResponse)
@@ -300,9 +375,10 @@ def cancel_sale(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Onayli satisi iptal eder: stok ters kaydi olusur, belge kilitli kalir."""
+    """Onayli satisi iptal eder: bagli sevkiyat(lar) iptal edilir, stok geri doner."""
     sale = _load_sale(db, sale_id)
     reason = payload.reason if payload else None
+    _cancel_linked_delivery_notes(db, sale, current_user.id)
     document_service.cancel(db, sale, user_id=current_user.id, reason=reason)
     sale.status = 'cancelled'
     try:

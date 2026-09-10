@@ -15,19 +15,25 @@ class CustomerBase(BaseModel):
 
 
 class CustomerCreate(CustomerBase):
-    pass
+    # Phase 15: kredi limiti (0 = limitsiz) ve vade gun sayisi
+    credit_limit: Decimal = Field(default=Decimal('0'), ge=0)
+    credit_days: int = Field(default=0, ge=0, le=365)
 
 
 class CustomerUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     email: Optional[EmailStr] = None
     phone: Optional[str] = Field(default=None, max_length=20)
+    credit_limit: Optional[Decimal] = Field(default=None, ge=0)
+    credit_days: Optional[int] = Field(default=None, ge=0, le=365)
 
 
 class CustomerResponse(CustomerBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    credit_limit: Decimal = Decimal('0')
+    credit_days: int = 0
     created_at: Optional[datetime] = None
 
 
@@ -109,6 +115,8 @@ class SalesItemCreate(BaseModel):
     warehouse_id: Optional[int] = None
     # Phase 13: farkli birimde satis. Ledger'a yazilirken stok birimine cevrilir.
     uom_id: Optional[int] = None
+    # Phase 15: siparis kaleminde KDV orani (yuzde)
+    tax_rate: Decimal = Field(default=Decimal('0'), ge=0, le=100)
 
 
 class SalesItemResponse(BaseModel):
@@ -118,10 +126,13 @@ class SalesItemResponse(BaseModel):
     product_id: int
     quantity: Decimal
     unit_price: Decimal
+    tax_rate: Decimal = Decimal('0')
     total_price: Decimal
     warehouse_id: Optional[int] = None
     uom_id: Optional[int] = None
     stock_quantity: Optional[Decimal] = None
+    delivered_quantity: Decimal = Decimal('0')
+    remaining_quantity: Optional[Decimal] = None
     product_name: Optional[str] = None
     product_sku: Optional[str] = None
     warehouse_name: Optional[str] = None
@@ -133,10 +144,13 @@ class SalesItemResponse(BaseModel):
 class SaleCreate(BaseModel):
     customer_id: int
     sale_date: Optional[date] = None
+    warehouse_id: Optional[int] = None
     items: List[SalesItemCreate] = Field(min_length=1)
     # Phase 11: varsayilan davranis "olustur ve onayla" (stok hareketi olusur).
     # true verilirse belge taslak kalir, stok hareketi onaya kadar yazilmaz.
     save_as_draft: bool = False
+    # Phase 15: kredi limiti asilsa bile devam et (uyari yine de doner)
+    block_if_credit_exceeded: bool = False
 
 
 class SaleStatusUpdate(BaseModel):
@@ -149,6 +163,8 @@ class SaleResponse(BaseModel):
     id: int
     customer_id: int
     sale_date: date
+    so_number: Optional[str] = None
+    warehouse_id: Optional[int] = None
     total_amount: Decimal
     status: str
     docstatus: int = 0
@@ -161,6 +177,8 @@ class SaleResponse(BaseModel):
     created_at: Optional[datetime] = None
     customer: Optional[CustomerResponse] = None
     items: List[SalesItemResponse] = []
+    # Phase 15: kredi limiti asildiginda uyari (engellemez, bilgi amacli)
+    credit_warning: Optional[dict] = None
 
 
 # ---------------- Invoice ----------------
@@ -181,12 +199,18 @@ class InvoiceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    sale_id: int
+    # Phase 15: kalemli fatura satistan bagimsiz da olusabilir (sale_id yok)
+    sale_id: Optional[int] = None
+    delivery_note_id: Optional[int] = None
     invoice_number: Optional[str] = None
     customer_id: int
     issued_date: date
+    due_date: Optional[date] = None
+    subtotal: Optional[Decimal] = None
+    tax_total: Optional[Decimal] = None
     total_amount: Decimal
     status: str
+    payment_status: str = 'odenmedi'
     docstatus: int = 0
     docstatus_label: Optional[str] = None
     submitted_at: Optional[datetime] = None
@@ -195,6 +219,7 @@ class InvoiceResponse(BaseModel):
     cancelled_by: Optional[int] = None
     cancel_reason: Optional[str] = None
     created_at: Optional[datetime] = None
+    items: List['InvoiceItemResponse'] = []
 
 
 # ---------------- User / Auth ----------------
@@ -877,3 +902,216 @@ class PurchaseMatchResponse(BaseModel):
     status: str
     has_difference: bool
     rows: List[PurchaseMatchRow] = []
+
+
+# ---------------- Phase 15: Teklif, Siparis, Sevkiyat, Kredi ----------------
+
+class QuotationItemCreate(BaseModel):
+    product_id: int
+    uom_id: Optional[int] = None
+    quantity: Decimal = Field(gt=0)
+    unit_price: Decimal = Field(ge=0)
+    tax_rate: Decimal = Field(default=Decimal('0'), ge=0, le=100)
+
+
+class QuotationItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    product_id: int
+    product_name: Optional[str] = None
+    product_sku: Optional[str] = None
+    uom_id: Optional[int] = None
+    uom_code: Optional[str] = None
+    quantity: Decimal
+    unit_price: Decimal
+    tax_rate: Decimal
+    total_price: Decimal
+
+
+class QuotationCreate(BaseModel):
+    customer_id: int
+    quotation_date: Optional[date] = None
+    valid_until: Optional[date] = None
+    note: Optional[str] = None
+    save_as_draft: bool = False
+    items: List[QuotationItemCreate] = Field(min_length=1)
+
+
+class QuotationUpdate(BaseModel):
+    valid_until: Optional[date] = None
+    note: Optional[str] = None
+    items: Optional[List[QuotationItemCreate]] = None
+
+
+class QuotationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    quotation_number: Optional[str] = None
+    customer_id: int
+    customer_name: Optional[str] = None
+    quotation_date: date
+    valid_until: Optional[date] = None
+    status: str
+    docstatus: int
+    docstatus_label: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: Optional[str] = None
+    subtotal: Decimal
+    tax_total: Decimal
+    total_amount: Decimal
+    note: Optional[str] = None
+    created_at: Optional[datetime] = None
+    items: List[QuotationItemResponse] = []
+
+
+class QuotationToSalesOrderRequest(BaseModel):
+    """Teklifi siparise cevirir. warehouse_id/promised_delivery_date opsiyonel."""
+    warehouse_id: Optional[int] = None
+    promised_delivery_date: Optional[date] = None
+    save_as_draft: bool = False
+
+
+# ---------------- SalesOrder (dedicated router - /api/sales-orders) ----------------
+
+class SalesOrderCreate(SaleCreate):
+    quotation_id: Optional[int] = None
+    promised_delivery_date: Optional[date] = None
+
+
+class SalesOrderResponse(SaleResponse):
+    quotation_id: Optional[int] = None
+    promised_delivery_date: Optional[date] = None
+    subtotal: Optional[Decimal] = None
+    tax_total: Optional[Decimal] = None
+
+
+# ---------------- DeliveryNote ----------------
+
+class DeliveryNoteItemCreate(BaseModel):
+    product_id: int
+    sales_order_item_id: Optional[int] = None
+    uom_id: Optional[int] = None
+    warehouse_id: Optional[int] = None
+    quantity: Decimal = Field(gt=0)
+    unit_price: Decimal = Field(default=Decimal('0'), ge=0)
+    item_status: str = Field(default='hazirlanan')
+
+
+class DeliveryNoteItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    product_id: int
+    product_name: Optional[str] = None
+    product_sku: Optional[str] = None
+    sales_order_item_id: Optional[int] = None
+    uom_id: Optional[int] = None
+    uom_code: Optional[str] = None
+    warehouse_id: Optional[int] = None
+    quantity: Decimal
+    stock_quantity: Optional[Decimal] = None
+    unit_price: Decimal
+    item_status: str
+
+
+class DeliveryNoteCreate(BaseModel):
+    sales_order_id: Optional[int] = None
+    customer_id: int
+    warehouse_id: Optional[int] = None
+    delivery_date: Optional[date] = None
+    note: Optional[str] = None
+    save_as_draft: bool = False
+    items: List[DeliveryNoteItemCreate] = Field(min_length=1)
+
+
+class DeliveryNoteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    delivery_note_number: Optional[str] = None
+    sales_order_id: Optional[int] = None
+    so_number: Optional[str] = None
+    customer_id: int
+    customer_name: Optional[str] = None
+    warehouse_id: Optional[int] = None
+    delivery_date: date
+    docstatus: int
+    docstatus_label: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: Optional[str] = None
+    note: Optional[str] = None
+    created_at: Optional[datetime] = None
+    items: List[DeliveryNoteItemResponse] = []
+
+
+# ---------------- Invoice (kalemli, Phase 15) ----------------
+
+class InvoiceItemCreate(BaseModel):
+    product_id: int
+    uom_id: Optional[int] = None
+    quantity: Decimal = Field(gt=0)
+    unit_price: Decimal = Field(ge=0)
+    tax_rate: Decimal = Field(default=Decimal('0'), ge=0, le=100)
+
+
+class InvoiceItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    product_id: int
+    product_name: Optional[str] = None
+    product_sku: Optional[str] = None
+    uom_id: Optional[int] = None
+    uom_code: Optional[str] = None
+    quantity: Decimal
+    unit_price: Decimal
+    tax_rate: Decimal
+    total_price: Decimal
+
+
+class InvoiceCreateV2(BaseModel):
+    """POST /api/invoices - kalemli fatura, satistan bagimsiz olusturulabilir."""
+    customer_id: int
+    delivery_note_id: Optional[int] = None
+    issued_date: Optional[date] = None
+    due_date: Optional[date] = None
+    note: Optional[str] = None
+    save_as_draft: bool = False
+    items: List[InvoiceItemCreate] = Field(min_length=1)
+
+
+class InvoiceUpdate(BaseModel):
+    payment_status: Optional[str] = None
+    due_date: Optional[date] = None
+
+
+# ---------------- Kredi limiti ----------------
+
+class CustomerCreditUpdate(BaseModel):
+    credit_limit: Decimal = Field(ge=0)
+    credit_days: int = Field(default=0, ge=0, le=365)
+
+
+class CreditCheckResponse(BaseModel):
+    allowed: bool
+    credit_limit: Decimal
+    credit_used: Decimal
+    available: Optional[Decimal] = None
+    requested: Decimal
+    message: Optional[str] = None
+
+
+class CustomerCreditSummary(BaseModel):
+    customer_id: int
+    customer_name: str
+    credit_limit: Decimal
+    credit_used: Decimal
+    available: Optional[Decimal] = None
+    credit_days: int
+
+
+InvoiceResponse.model_rebuild()

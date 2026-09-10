@@ -120,8 +120,10 @@ def test_satis_ledgera_negatif_hareket_yazar(client, tracker):
     assert len(entries) == 1
     assert Decimal(str(entries[0]['change_qty'])) == Decimal('-3')
     assert Decimal(str(entries[0]['balance_qty'])) == Decimal('17')
-    assert entries[0]['ref_type'] == 'sale'
-    assert entries[0]['ref_id'] == sale['id']
+    # Phase 15: stok hareketi artik DeliveryNote onayinda olusur - uyum
+    # katmani /api/sales onaylaninca otomatik (ayri id'li) bir sevkiyat acar.
+    assert entries[0]['ref_type'] == 'delivery'
+    assert entries[0]['ref_id'] is not None
 
 
 def test_ayni_urun_iki_satirda_toplam_uzerinden_duser(client, tracker):
@@ -493,10 +495,10 @@ def test_para_ve_miktar_kolonlari_numeric():
     """Float yasagi: para/miktar kolonlari numeric(18, 4) olmali."""
     expected = [
         ('products', 'price'),
-        ('sales', 'total_amount'),
-        ('sales_items', 'quantity'),
-        ('sales_items', 'unit_price'),
-        ('sales_items', 'total_price'),
+        ('sales_orders', 'total_amount'),
+        ('sales_order_items', 'quantity'),
+        ('sales_order_items', 'unit_price'),
+        ('sales_order_items', 'total_price'),
         ('invoices', 'total_amount'),
         ('stock_ledger_entries', 'change_qty'),
         ('stock_ledger_entries', 'balance_qty'),

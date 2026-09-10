@@ -47,7 +47,12 @@ LOW_STOCK_THRESHOLD = 10
 OVERDUE_DAYS = 30
 
 # Ciroya sayilan satis durumlari
-ACTIVE_STATUSES = ('pending', 'completed')
+# Phase 15: yeni akista SalesOrder durumu artik pending/completed disinda
+# da olabilir (confirmed/partially_delivered/delivered) - ciro/urun
+# raporlarina bu durumlar da dahil edilir. Yalnizca 'cancelled' haric tutulur.
+ACTIVE_STATUSES = (
+    'pending', 'completed', 'confirmed', 'partially_delivered', 'delivered',
+)
 
 TURKISH_MONTHS = [
     'Oca', 'Sub', 'Mar', 'Nis', 'May', 'Haz',
@@ -137,7 +142,7 @@ def top_products(
             func.sum(SalesItem.total_price).label('revenue'),
         )
         .join(SalesItem, SalesItem.product_id == Product.id)
-        .join(Sale, Sale.id == SalesItem.sale_id)
+        .join(Sale, Sale.id == SalesItem.sales_order_id)
         .filter(Sale.status.in_(ACTIVE_STATUSES))
         .group_by(Product.id, Product.name, Product.sku)
         .order_by(
@@ -208,7 +213,7 @@ def product_history(product_id: int, db: Session = Depends(get_db)):
             SalesItem.unit_price,
             SalesItem.total_price,
         )
-        .join(SalesItem, SalesItem.sale_id == Sale.id)
+        .join(SalesItem, SalesItem.sales_order_id == Sale.id)
         .join(Customer, Customer.id == Sale.customer_id)
         .filter(SalesItem.product_id == product_id)
         .order_by(Sale.sale_date.desc(), Sale.id.desc())
