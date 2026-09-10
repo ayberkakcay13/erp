@@ -40,8 +40,27 @@ LIFECYCLE_COLUMNS = [
     ('cancel_reason', 'TEXT'),
 ]
 
+# Phase 15: `sales` -> `sales_orders` olarak yeniden adlandirildi. Bu
+# migration'in idempotency testi (iki kez calistirilinca bozulmamali) hala
+# gecerli olsun diye eski ad gercek (guncel) tablo adina cozulur.
+RENAMED_TABLES = {'sales': 'sales_orders'}
+
+
+def table_exists(conn, table: str) -> bool:
+    return conn.execute(
+        text("SELECT 1 FROM information_schema.tables WHERE table_name = :t"),
+        {'t': table},
+    ).first() is not None
+
+
+def resolve_table(conn, table: str) -> str:
+    if not table_exists(conn, table) and table in RENAMED_TABLES:
+        return RENAMED_TABLES[table]
+    return table
+
 
 def column_exists(conn, table: str, column: str) -> bool:
+    table = resolve_table(conn, table)
     return conn.execute(
         text(
             'SELECT 1 FROM information_schema.columns '
@@ -72,17 +91,19 @@ def main() -> None:
         conn.execute(text("SELECT set_config('app.bypass_rls', 'on', true)"))
 
         step(2, 'Belge yasam dongusu kolonlari')
-        for table in DOCUMENT_TABLES:
+        for raw_table in DOCUMENT_TABLES:
+            table = resolve_table(conn, raw_table)
             added = []
             for column, ddl in LIFECYCLE_COLUMNS:
-                if column_exists(conn, table, column):
+                if column_exists(conn, raw_table, column):
                     continue
                 conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {ddl}'))
                 added.append(column)
             print(f'  {table}: {"eklendi -> " + ", ".join(added) if added else "zaten var"}')
 
         step(3, 'Mevcut kayitlarin docstatus degeri')
-        for table, cancelled_condition in DOCUMENT_TABLES.items():
+        for raw_table, cancelled_condition in DOCUMENT_TABLES.items():
+            table = resolve_table(conn, raw_table)
             # Sadece hic dokunulmamis (docstatus=0) kayitlar isaretlenir;
             # tekrar calistirmada onceki islem bozulmaz.
             cancelled = conn.execute(text(

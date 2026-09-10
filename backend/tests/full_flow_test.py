@@ -226,17 +226,26 @@ try:
     from app.database import engine
 
     with engine.begin() as conn:
+        # Phase 15: sales/sales_items -> sales_orders/sales_order_items olarak
+        # yeniden adlandirildi; uyum katmani /api/sales onayda otomatik bir
+        # DeliveryNote de acar - o da silinmeli (FK: delivery_notes.sales_order_id).
         # Phase 11: bu kayitlarin denetim izi satirlari da temizlenir
         sale_ids = [
             r[0] for r in conn.execute(
-                text('SELECT id FROM sales WHERE customer_id = :c'), {'c': cid})
+                text('SELECT id FROM sales_orders WHERE customer_id = :c'), {'c': cid})
         ]
         invoice_ids = [
             r[0] for r in conn.execute(
                 text('SELECT id FROM invoices WHERE sale_id = ANY(:s)'),
                 {'s': sale_ids or [0]})
         ]
-        for table, ids in (('sales', sale_ids), ('invoices', invoice_ids),
+        delivery_note_ids = [
+            r[0] for r in conn.execute(
+                text('SELECT id FROM delivery_notes WHERE sales_order_id = ANY(:s)'),
+                {'s': sale_ids or [0]})
+        ]
+        for table, ids in (('sales_orders', sale_ids), ('invoices', invoice_ids),
+                           ('delivery_notes', delivery_note_ids),
                            ('products', pids), ('customers', [cid])):
             conn.execute(
                 text('DELETE FROM audit_logs WHERE table_name = :t '
@@ -245,13 +254,19 @@ try:
             )
         conn.execute(text(
             'DELETE FROM invoices WHERE sale_id IN '
-            '(SELECT id FROM sales WHERE customer_id = :c)'), {'c': cid})
+            '(SELECT id FROM sales_orders WHERE customer_id = :c)'), {'c': cid})
         conn.execute(text(
-            'DELETE FROM sales_items WHERE sale_id IN '
-            '(SELECT id FROM sales WHERE customer_id = :c)'), {'c': cid})
+            'DELETE FROM delivery_note_items WHERE delivery_note_id = ANY(:d)'),
+            {'d': delivery_note_ids or [0]})
+        conn.execute(text(
+            'DELETE FROM delivery_notes WHERE id = ANY(:d)'),
+            {'d': delivery_note_ids or [0]})
+        conn.execute(text(
+            'DELETE FROM sales_order_items WHERE sales_order_id IN '
+            '(SELECT id FROM sales_orders WHERE customer_id = :c)'), {'c': cid})
         conn.execute(text(
             'DELETE FROM stock_ledger_entries WHERE product_id = ANY(:p)'), {'p': pids})
-        conn.execute(text('DELETE FROM sales WHERE customer_id = :c'), {'c': cid})
+        conn.execute(text('DELETE FROM sales_orders WHERE customer_id = :c'), {'c': cid})
         conn.execute(text('DELETE FROM products WHERE id = ANY(:p)'), {'p': pids})
         conn.execute(text('DELETE FROM customers WHERE id = :c'), {'c': cid})
     check('test kayitlari silindi', True)

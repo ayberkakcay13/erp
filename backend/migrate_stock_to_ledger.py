@@ -32,8 +32,29 @@ NUMERIC_COLUMNS = [
     ('invoices', 'total_amount'),
 ]
 
+# Phase 15: `sales`/`sales_items` -> `sales_orders`/`sales_order_items` olarak
+# yeniden adlandirildi. Bu migration'in kendi idempotency testi (iki kez
+# calistirilinca bozulmamali) hala gecerli olsun diye eski adlar gercek
+# (guncel) tablo adina cozulur.
+RENAMED_TABLES = {'sales': 'sales_orders', 'sales_items': 'sales_order_items'}
+
+
+def table_exists(conn, table: str) -> bool:
+    return conn.execute(
+        text("SELECT 1 FROM information_schema.tables WHERE table_name = :t"),
+        {'t': table},
+    ).first() is not None
+
+
+def resolve_table(conn, table: str) -> str:
+    """Tablo Phase 15'te yeniden adlandirildiyse guncel adini doner."""
+    if not table_exists(conn, table) and table in RENAMED_TABLES:
+        return RENAMED_TABLES[table]
+    return table
+
 
 def column_exists(conn, table: str, column: str) -> bool:
+    table = resolve_table(conn, table)
     return conn.execute(
         text(
             'SELECT 1 FROM information_schema.columns '
@@ -58,19 +79,24 @@ def main() -> None:
         print(f'  [{"OK " if name in tables else "EKSIK"}] {name}')
 
     with engine.begin() as conn:
-        step(2, 'sales_items.warehouse_id kolonu')
+        sales_items_table = resolve_table(conn, 'sales_items')
+        step(2, f'{sales_items_table}.warehouse_id kolonu')
         if column_exists(conn, 'sales_items', 'warehouse_id'):
             print('  zaten var, atlaniyor')
         else:
-            conn.execute(text('ALTER TABLE sales_items ADD COLUMN warehouse_id INTEGER'))
+            conn.execute(
+                text(f'ALTER TABLE {sales_items_table} ADD COLUMN warehouse_id INTEGER')
+            )
             conn.execute(text(
-                'ALTER TABLE sales_items ADD CONSTRAINT sales_items_warehouse_id_fkey '
+                f'ALTER TABLE {sales_items_table} ADD CONSTRAINT '
+                f'{sales_items_table}_warehouse_id_fkey '
                 'FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)'
             ))
             print('  eklendi')
 
         step(3, 'Para/miktar kolonlari numeric(18, 4) yapiliyor')
-        for table, column in NUMERIC_COLUMNS:
+        for raw_table, column in NUMERIC_COLUMNS:
+            table = resolve_table(conn, raw_table)
             current = conn.execute(
                 text(
                     'SELECT data_type, numeric_precision, numeric_scale '

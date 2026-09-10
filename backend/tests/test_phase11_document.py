@@ -430,7 +430,9 @@ def test_onay_ve_iptal_audit_loga_duser(client, tracker):
     ]).json()
     client.post(f'/api/sales/{sale["id"]}/cancel', json={'reason': 'test'})
 
-    logs = client.get(f'/api/audit-log/sales/{sale["id"]}').json()
+    # Phase 15: audit_logs.table_name artik 'sales_orders' (tablo yeniden
+    # adlandirildi).
+    logs = client.get(f'/api/audit-log/sales_orders/{sale["id"]}').json()
     actions = {log['action'] for log in logs}
     assert 'submit' in actions, actions
     assert 'cancel' in actions, actions
@@ -474,7 +476,8 @@ def test_audit_log_sadece_admin(client, tracker, admin_token):
 
 def test_belge_tablolarinda_docstatus_kolonu_var():
     with engine.connect() as conn:
-        for table in ('sales', 'invoices', 'stock_transfers'):
+        for table in ('sales_orders', 'invoices', 'stock_transfers',
+                      'quotations', 'delivery_notes'):
             found = conn.execute(
                 text(
                     'SELECT 1 FROM information_schema.columns '

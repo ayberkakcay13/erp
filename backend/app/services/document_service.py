@@ -1,4 +1,4 @@
-"""Belge yasam dongusu servisi (Phase 11).
+"""Belge yasam dongusu servisi (Phase 11, Phase 15'te satis zinciri icin genisletildi).
 
 `submit()` ve `cancel()` belgelerin tek gecis noktasidir. Yan etkiler
 (stok hareketi, numara atama) burada tetiklenir - router'lar dogrudan
@@ -9,20 +9,29 @@ Kurallar:
 - onayli (1) -> iptal (2): ters stok hareketi yazilir
 - iptal edilen belge TEKRAR ONAYLANAMAZ. Duzeltme icin yeni belge kesilir.
   (Bu kural Phase 4/10'daki "iptali geri al" davranisinin yerini alir.)
+
+Phase 15 satis zinciri: Quotation -> SalesOrder -> DeliveryNote -> Invoice.
+STOK HAREKETI YALNIZCA DeliveryNote onayinda olusur (reason='satis',
+ref_type='delivery'). SalesOrder onayi niyet beyanidir, stok hareketi
+yaratmaz - eski `Sale` davranisinin (onay = stok dususu) yerini bu alir.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models import (
+    Customer,
+    DeliveryNote,
     DocStatus,
     Invoice,
     PurchaseInvoice,
     PurchaseOrder,
     PurchaseReceipt,
-    Sale,
+    Quotation,
+    SalesOrder,
+    SalesOrderItem,
     StockTransfer,
 )
 from . import (
@@ -31,11 +40,14 @@ from . import (
     purchase_service,
     stock_service,
     tenant_context,
+    uom_service,
 )
 
 # Belge tipi -> (numaralandirma doc_type, numara alani)
 NUMBERING = {
-    Sale: (None, None),                     # satis numarasi zorunlu degil
+    Quotation: ('quotation', 'quotation_number'),
+    SalesOrder: ('sales_order', 'so_number'),
+    DeliveryNote: ('delivery_note', 'delivery_note_number'),
     Invoice: ('invoice', 'invoice_number'),
     StockTransfer: ('transfer', 'transfer_no'),
     PurchaseOrder: ('purchase_order', 'po_number'),
@@ -72,25 +84,33 @@ def _require_submitted(doc) -> None:
 
 # ---------------- Yan etkiler ----------------
 
-def _sale_stock_entries(db: Session, sale: Sale, sign: int, user_id, note: str) -> None:
-    """Satis kalemlerini (urun, depo) kiriliminda ledger'a isler.
+def _delivery_stock_entries(
+    db: Session, delivery_note: DeliveryNote, submitting: bool, user_id, note: str
+) -> None:
+    """Sevkiyat kalemlerini (urun, depo) kiriliminda ledger'a isler.
 
-    Phase 13: ledger'a yazilan miktar HER ZAMAN urunun stok biriminde olur.
-    Kalem farkli birimde girildiyse (koli satis, adet stok) donusum satis
-    kaydedilirken `stock_quantity` alanina yazilmistir; burada o kullanilir.
+    Phase 15: stok hareketi YALNIZCA burada olusur. Phase 13 kurali gecerli -
+    ledger'a yazilan miktar her zaman urunun stok biriminde olur; kalem
+    olusturulurken `stock_quantity` alanina onceden yazilmistir.
+
+    Ayrica bagli SalesOrderItem.delivered_quantity guncellenir - kismi
+    sevkiyat hesabinin temeli budur. `SalesOrder.status` burada DEGISTIRILMEZ;
+    `/api/sales` uyum katmani kendi status degerini korur, yeni akis
+    `sales_order_service.refresh_delivery_status()` cagirir.
     """
     totals: dict[tuple[int, int], object] = {}
-    for item in sale.items:
-        wh_id = stock_service.resolve_warehouse_id(db, item.warehouse_id)
-        key = (item.product_id, wh_id)
+    for item in delivery_note.items:
+        wh_id = stock_service.resolve_warehouse_id(
+            db, item.warehouse_id or delivery_note.warehouse_id
+        )
         quantity = item.stock_quantity
         if quantity is None:
-            quantity = item.quantity  # Phase 13 oncesi kayitlar tek birimliydi
-        totals[key] = totals.get(key, stock_service.ZERO) + stock_service.to_decimal(
-            quantity
-        )
+            quantity = item.quantity
+        key = (item.product_id, wh_id)
+        totals[key] = totals.get(key, stock_service.ZERO) + stock_service.to_decimal(quantity)
 
-    reason = 'satis' if sign < 0 else 'satis_iptal'
+    reason = 'satis' if submitting else 'satis_iptal'
+    sign = -1 if submitting else 1
     for (product_id, wh_id), quantity in totals.items():
         stock_service.add_entry(
             db,
@@ -98,10 +118,28 @@ def _sale_stock_entries(db: Session, sale: Sale, sign: int, user_id, note: str) 
             warehouse_id=wh_id,
             change_qty=sign * quantity,
             reason=reason,
-            ref_type='sale',
-            ref_id=sale.id,
+            ref_type='delivery',
+            ref_id=delivery_note.id,
             user_id=user_id,
             note=note,
+        )
+
+    delta_sign = 1 if submitting else -1
+    for item in delivery_note.items:
+        if item.sales_order_item_id is None:
+            continue
+        order_item = db.get(SalesOrderItem, item.sales_order_item_id)
+        if order_item is None:
+            continue
+        quantity = item.stock_quantity if item.stock_quantity is not None else item.quantity
+        quantity = stock_service.to_decimal(quantity)
+        if item.uom_id and order_item.uom_id and item.uom_id != order_item.uom_id:
+            quantity = uom_service.convert(
+                db, quantity, item.uom_id, order_item.uom_id, order_item.product_id
+            )
+        order_item.delivered_quantity = (
+            stock_service.to_decimal(order_item.delivered_quantity)
+            + delta_sign * quantity
         )
 
 
@@ -134,17 +172,32 @@ def _purchase_invoice_effects(db: Session, invoice: PurchaseInvoice) -> None:
         invoice.due_date = purchase_service.due_date_for(supplier, invoice.invoice_date)
 
 
+def _sales_invoice_effects(db: Session, invoice: Invoice) -> None:
+    """Satis faturasi stok hareketi yaratmaz (stok sevkiyatta gitmistir).
+
+    `due_date` bossa musterinin vade gun sayisindan (Customer.credit_days)
+    hesaplanir.
+    """
+    if invoice.due_date is not None or invoice.issued_date is None:
+        return
+    customer = db.get(Customer, invoice.customer_id) if invoice.customer_id else None
+    days = customer.credit_days if customer else 0
+    invoice.due_date = invoice.issued_date + timedelta(days=days or 0)
+
+
 def _apply_effects(db: Session, doc, submitting: bool, user_id, note: str) -> None:
-    if isinstance(doc, Sale):
-        _sale_stock_entries(db, doc, -1 if submitting else 1, user_id, note)
+    if isinstance(doc, DeliveryNote):
+        _delivery_stock_entries(db, doc, submitting, user_id, note)
     elif isinstance(doc, StockTransfer):
         _transfer_stock_entries(db, doc, 1 if submitting else -1, user_id, note)
     elif isinstance(doc, PurchaseReceipt):
         purchase_service.apply_receipt(db, doc, 1 if submitting else -1, user_id)
     elif isinstance(doc, PurchaseInvoice) and submitting:
         _purchase_invoice_effects(db, doc)
-    # Invoice ve PurchaseOrder'in stok yan etkisi yok - stok satis ve mal
-    # kabulde hareket eder.
+    elif isinstance(doc, Invoice) and submitting:
+        _sales_invoice_effects(db, doc)
+    # SalesOrder ve Quotation'in stok yan etkisi yok - stok yalnizca
+    # DeliveryNote onayinda hareket eder (Phase 15 kurali).
 
 
 # ---------------- Genel gecisler ----------------
@@ -152,7 +205,7 @@ def _apply_effects(db: Session, doc, submitting: bool, user_id, note: str) -> No
 def submit(db: Session, doc, user_id: Optional[int] = None):
     """Taslak belgeyi onaylar: numara atar ve yan etkileri tetikler.
 
-    commit ETMEZ - cagiran router commit eder.
+    commit ETMEZ - cagiran router kendi transaction'inda commit eder.
     """
     _require_draft(doc)
 

@@ -76,7 +76,11 @@ class Customer(TenantMixin, Base):
     email = Column(String(255), nullable=False)
     phone = Column(String(20))
     created_at = Column(DateTime, default=datetime.utcnow)
-    sales = relationship('Sale', back_populates='customer', cascade='all, delete-orphan')
+    credit_limit = Column(Numeric(18, 4), nullable=False, default=0)
+    credit_days = Column(Integer, nullable=False, default=0)
+    sales = relationship(
+        'SalesOrder', back_populates='customer', cascade='all, delete-orphan'
+    )
 
     __table_args__ = (
         UniqueConstraint('tenant_id', 'email', name='uq_customers_tenant_email'),
@@ -110,7 +114,7 @@ class Product(TenantMixin, Base):
     is_variant_template = Column(Boolean, nullable=False, default=False)
     parent_product_id = Column(Integer, ForeignKey('products.id'), nullable=True)
 
-    sales_items = relationship('SalesItem', back_populates='product')
+    sales_items = relationship('SalesOrderItem', back_populates='product')
     stock_uom = relationship('UOM', foreign_keys=[stock_uom_id])
     purchase_uom = relationship('UOM', foreign_keys=[purchase_uom_id])
     sales_uom = relationship('UOM', foreign_keys=[sales_uom_id])
@@ -136,12 +140,25 @@ class Product(TenantMixin, Base):
         UniqueConstraint('tenant_id', 'sku', name='uq_products_tenant_sku'),
     )
 
-class Sale(TenantMixin, Base):
-    __tablename__ = 'sales'
+class SalesOrder(TenantMixin, Base):
+    """Satis siparisi (Phase 15 - eski Sale'in yerini alir, ayni tablo id'leri).
+
+    Onayi STOK HAREKETI YARATMAZ - niyet beyanidir. Stok yalnizca DeliveryNote
+    onayinda hareket eder (bkz. document_service._delivery_stock_entries).
+    """
+    __tablename__ = 'sales_orders'
     id = Column(Integer, primary_key=True)
+    so_number = Column(String(50), nullable=True)
+    quotation_id = Column(Integer, ForeignKey('quotations.id'), nullable=True)
     customer_id = Column(Integer, ForeignKey('customers.id'), nullable=False)
     sale_date = Column(Date, nullable=False)
+    promised_delivery_date = Column(Date, nullable=True)
+    warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=True)
+    subtotal = Column(Numeric(18, 4), nullable=True)
+    tax_total = Column(Numeric(18, 4), nullable=True)
     total_amount = Column(Numeric(18, 4), nullable=False)
+    # draft|pending|confirmed|partially_delivered|delivered|completed|cancelled
+    # (pending/completed eski Sale uyum degerleri; SalesOrder bunlari da kabul eder)
     status = Column(String(20), default='pending')
     # Phase 11: belge yasam dongusu (status is durumu icin ayri kalir)
     docstatus = Column(Integer, nullable=False, default=0)
@@ -150,17 +167,29 @@ class Sale(TenantMixin, Base):
     cancelled_at = Column(DateTime, nullable=True)
     cancelled_by = Column(Integer, ForeignKey('users.id'), nullable=True)
     cancel_reason = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     customer = relationship('Customer', back_populates='sales')
-    items = relationship('SalesItem', back_populates='sale', cascade='all, delete-orphan')
+    quotation = relationship('Quotation')
+    warehouse = relationship('Warehouse')
+    items = relationship(
+        'SalesOrderItem', back_populates='sales_order', cascade='all, delete-orphan'
+    )
 
-class SalesItem(TenantMixin, Base):
-    __tablename__ = 'sales_items'
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'so_number', name='uq_sales_order_tenant_number'),
+    )
+
+
+class SalesOrderItem(TenantMixin, Base):
+    """Siparis kalemi (Phase 15 - eski SalesItem, ayni tablo id'leri)."""
+    __tablename__ = 'sales_order_items'
     id = Column(Integer, primary_key=True)
-    sale_id = Column(Integer, ForeignKey('sales.id'), nullable=False)
+    sales_order_id = Column(Integer, ForeignKey('sales_orders.id'), nullable=False)
     product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
     quantity = Column(Numeric(18, 4), nullable=False)
     unit_price = Column(Numeric(18, 4), nullable=False)
+    tax_rate = Column(Numeric(18, 4), nullable=False, default=0)
     total_price = Column(Numeric(18, 4), nullable=False)
     # Phase 10: satis kalemi hangi depodan cikti (bossa varsayilan depo)
     warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=True)
@@ -168,20 +197,142 @@ class SalesItem(TenantMixin, Base):
     # `stock_quantity` ise stok birimine cevrilmis hali - ledger bunu kullanir.
     uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=True)
     stock_quantity = Column(Numeric(18, 4), nullable=True)
-    sale = relationship('Sale', back_populates='items')
+    # Phase 15: DeliveryNote onaylandikca artar - kismi sevkiyat hesabinin temeli
+    delivered_quantity = Column(Numeric(18, 4), nullable=False, default=0)
+    sales_order = relationship('SalesOrder', back_populates='items')
     product = relationship('Product', back_populates='sales_items')
     uom = relationship('UOM')
+
+
+# Phase 10-14 kodu ve testleri Sale/SalesItem adiyla import ediyor;
+# Phase 15 tablo adini degistirdi ama sinif kimligini korumak icin alias.
+Sale = SalesOrder
+SalesItem = SalesOrderItem
+
+
+class Quotation(TenantMixin, Base):
+    """Teklif (Phase 15). Opsiyonel - SalesOrder dogrudan da acilabilir."""
+    __tablename__ = 'quotations'
+    id = Column(Integer, primary_key=True)
+    quotation_number = Column(String(50), nullable=True)
+    customer_id = Column(Integer, ForeignKey('customers.id'), nullable=False)
+    quotation_date = Column(Date, nullable=False, default=datetime.utcnow)
+    valid_until = Column(Date, nullable=True)
+    # taslak|gonderildi|kabul|red
+    status = Column(String(20), nullable=False, default='taslak')
+    docstatus = Column(Integer, nullable=False, default=0)
+    submitted_at = Column(DateTime, nullable=True)
+    submitted_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
+    subtotal = Column(Numeric(18, 4), nullable=False, default=0)
+    tax_total = Column(Numeric(18, 4), nullable=False, default=0)
+    total_amount = Column(Numeric(18, 4), nullable=False, default=0)
+    note = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    customer = relationship('Customer')
+    items = relationship(
+        'QuotationItem', back_populates='quotation', cascade='all, delete-orphan'
+    )
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'quotation_number', name='uq_quotation_tenant_number'),
+    )
+
+
+class QuotationItem(TenantMixin, Base):
+    __tablename__ = 'quotation_items'
+    id = Column(Integer, primary_key=True)
+    quotation_id = Column(Integer, ForeignKey('quotations.id'), nullable=False)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
+    uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=True)
+    quantity = Column(Numeric(18, 4), nullable=False)
+    unit_price = Column(Numeric(18, 4), nullable=False)
+    tax_rate = Column(Numeric(18, 4), nullable=False, default=0)
+    total_price = Column(Numeric(18, 4), nullable=False)
+
+    quotation = relationship('Quotation', back_populates='items')
+    product = relationship('Product')
+    uom = relationship('UOM')
+
+
+class DeliveryNote(TenantMixin, Base):
+    """Sevkiyat irsaliyesi (Phase 15). STOK HAREKETI BURADA olusur.
+
+    Onayla (docstatus=1) HER KALEM icin stock_service.add_entry(reason='satis',
+    ref_type='delivery', ref_id=delivery_note.id) cagrilir.
+    """
+    __tablename__ = 'delivery_notes'
+    id = Column(Integer, primary_key=True)
+    delivery_note_number = Column(String(50), nullable=True)
+    sales_order_id = Column(Integer, ForeignKey('sales_orders.id'), nullable=True)
+    customer_id = Column(Integer, ForeignKey('customers.id'), nullable=False)
+    warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=True)
+    delivery_date = Column(Date, nullable=False, default=datetime.utcnow)
+    docstatus = Column(Integer, nullable=False, default=0)
+    submitted_at = Column(DateTime, nullable=True)
+    submitted_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
+    note = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    sales_order = relationship('SalesOrder')
+    customer = relationship('Customer')
+    warehouse = relationship('Warehouse')
+    items = relationship(
+        'DeliveryNoteItem', back_populates='delivery_note', cascade='all, delete-orphan'
+    )
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'delivery_note_number', name='uq_dn_tenant_number'),
+    )
+
+
+class DeliveryNoteItem(TenantMixin, Base):
+    __tablename__ = 'delivery_note_items'
+    id = Column(Integer, primary_key=True)
+    delivery_note_id = Column(Integer, ForeignKey('delivery_notes.id'), nullable=False)
+    sales_order_item_id = Column(Integer, ForeignKey('sales_order_items.id'), nullable=True)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
+    uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=True)
+    quantity = Column(Numeric(18, 4), nullable=False)
+    unit_price = Column(Numeric(18, 4), nullable=False, default=0)
+    # Kalem bossa DeliveryNote.warehouse_id kullanilir - Phase 10 kalitindan
+    # (satis kalemi hangi depodan cikti) uyum icin
+    warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=True)
+    # Phase 13 kurali: ledger'a yazilan miktar her zaman stok biriminde
+    stock_quantity = Column(Numeric(18, 4), nullable=True)
+    # hazirlanan|paketlendi|sevk_edildi
+    item_status = Column(String(20), nullable=False, default='hazirlanan')
+
+    delivery_note = relationship('DeliveryNote', back_populates='items')
+    sales_order_item = relationship('SalesOrderItem')
+    product = relationship('Product')
+    uom = relationship('UOM')
+
 
 class Invoice(TenantMixin, Base):
     __tablename__ = 'invoices'
     id = Column(Integer, primary_key=True)
-    sale_id = Column(Integer, ForeignKey('sales.id'), unique=True)
+    sale_id = Column(Integer, ForeignKey('sales_orders.id'), unique=True)
+    delivery_note_id = Column(Integer, ForeignKey('delivery_notes.id'), nullable=True)
     # Phase 12: fatura numarasi tenant icinde tekil
     invoice_number = Column(String(50))
     customer_id = Column(Integer, ForeignKey('customers.id'))
     issued_date = Column(Date)
+    due_date = Column(Date, nullable=True)
+    subtotal = Column(Numeric(18, 4), nullable=True)
+    tax_total = Column(Numeric(18, 4), nullable=True)
     total_amount = Column(Numeric(18, 4))
     status = Column(String(20), default='draft')
+    # odenmedi|kismi|odendi
+    payment_status = Column(String(20), nullable=False, default='odenmedi')
     # Phase 11: belge yasam dongusu (status is durumu icin ayri kalir)
     docstatus = Column(Integer, nullable=False, default=0)
     submitted_at = Column(DateTime, nullable=True)
@@ -189,7 +340,32 @@ class Invoice(TenantMixin, Base):
     cancelled_at = Column(DateTime, nullable=True)
     cancelled_by = Column(Integer, ForeignKey('users.id'), nullable=True)
     cancel_reason = Column(Text, nullable=True)
+    note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    delivery_note = relationship('DeliveryNote')
+    items = relationship(
+        'InvoiceItem', back_populates='invoice', cascade='all, delete-orphan'
+    )
+
+
+class InvoiceItem(TenantMixin, Base):
+    __tablename__ = 'invoice_items'
+    id = Column(Integer, primary_key=True)
+    invoice_id = Column(Integer, ForeignKey('invoices.id'), nullable=False)
+    delivery_note_item_id = Column(
+        Integer, ForeignKey('delivery_note_items.id'), nullable=True
+    )
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
+    uom_id = Column(Integer, ForeignKey('uoms.id'), nullable=True)
+    quantity = Column(Numeric(18, 4), nullable=False)
+    unit_price = Column(Numeric(18, 4), nullable=False)
+    tax_rate = Column(Numeric(18, 4), nullable=False, default=0)
+    total_price = Column(Numeric(18, 4), nullable=False)
+
+    invoice = relationship('Invoice', back_populates='items')
+    product = relationship('Product')
+    uom = relationship('UOM')
 
 class User(TenantMixin, Base):
     __tablename__ = 'users'
@@ -216,7 +392,7 @@ STOCK_REASONS = (
     'transfer_giris', 'transfer_cikis', 'sayim', 'fire', 'duzeltme',
 )
 
-STOCK_REF_TYPES = ('sale', 'purchase', 'transfer', 'adjustment', 'opening')
+STOCK_REF_TYPES = ('sale', 'delivery', 'purchase', 'transfer', 'adjustment', 'opening')
 
 
 class Warehouse(TenantMixin, Base):
@@ -344,9 +520,12 @@ class DocStatus:
 
 
 # docstatus tasiyan modeller - degismezlik kurali bunlara uygulanir
+# NOT: `type(obj).__name__` ile karsilastirilir - Sale/SalesItem birer alias
+# oldugu icin gercek sinif adlari (SalesOrder) kullanilir.
 DOCUMENT_MODELS = (
-    'Sale', 'Invoice', 'StockTransfer',
+    'SalesOrder', 'Invoice', 'StockTransfer',
     'PurchaseOrder', 'PurchaseReceipt', 'PurchaseInvoice',
+    'Quotation', 'DeliveryNote',
 )
 
 # Onayli/iptal belgede degismesine izin verilen alanlar (submit/cancel akisi)
@@ -355,6 +534,7 @@ DOC_LIFECYCLE_FIELDS = frozenset({
     'cancelled_at', 'cancelled_by', 'cancel_reason',
     'invoice_number', 'transfer_no', 'status',
     'po_number', 'receipt_number', 'internal_number', 'payment_status',
+    'quotation_number', 'so_number', 'delivery_note_number',
 })
 
 

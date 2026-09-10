@@ -65,9 +65,16 @@ TENANT_DELETE_ORDER = (
     'stock_ledger_entries',
     'stock_transfer_items',
     'stock_transfers',
+    # Phase 15: fatura kalemi -> fatura -> sevkiyat kalemi -> sevkiyat ->
+    # siparis kalemi -> siparis -> teklif kalemi -> teklif (FK sirasi)
+    'invoice_items',
     'invoices',
-    'sales_items',
-    'sales',
+    'delivery_note_items',
+    'delivery_notes',
+    'sales_order_items',
+    'sales_orders',
+    'quotation_items',
+    'quotations',
     'audit_logs',
     'products',
     'item_attribute_values',
@@ -96,15 +103,17 @@ def _cleanup_tenant(tenant_id: int) -> None:
         conn.execute(
             text('DELETE FROM audit_logs WHERE user_id = ANY(:u)'), {'u': user_ids}
         )
-        for table in ('sales', 'invoices', 'stock_transfers', 'purchase_orders',
-                      'purchase_receipts', 'purchase_invoices'):
+        for table in ('sales_orders', 'invoices', 'stock_transfers', 'purchase_orders',
+                      'purchase_receipts', 'purchase_invoices',
+                      'delivery_notes', 'quotations'):
             for column in ('submitted_by', 'cancelled_by'):
                 conn.execute(
                     text(f'UPDATE {table} SET {column} = NULL WHERE {column} = ANY(:u)'),
                     {'u': user_ids},
                 )
         for table in ('stock_ledger_entries', 'stock_transfers', 'purchase_orders',
-                      'purchase_receipts', 'purchase_invoices'):
+                      'purchase_receipts', 'purchase_invoices',
+                      'sales_orders', 'delivery_notes', 'quotations'):
             conn.execute(
                 text(f'UPDATE {table} SET created_by = NULL WHERE created_by = ANY(:u)'),
                 {'u': user_ids},
@@ -399,10 +408,11 @@ def test_rls_tum_tenantli_tablolarda_zorlanmis():
     FORCE olmadan politikalar tablo sahibini atlar; uygulama Supabase'e
     tablo sahibi rolle baglandigi icin izolasyon hic calismazdi.
     """
-    from migrate_phase12_tenant import TENANT_TABLES
+    from migrate_phase12_tenant import TENANT_TABLES, resolve_table
 
     with admin_connection() as conn:
-        for table in TENANT_TABLES:
+        for raw_table in TENANT_TABLES:
+            table = resolve_table(conn, raw_table)
             enabled, forced = conn.execute(
                 text(
                     'SELECT c.relrowsecurity, c.relforcerowsecurity '

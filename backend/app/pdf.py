@@ -112,7 +112,7 @@ def build_invoice_pdf(invoice, sale, customer, items, tax_days=30) -> bytes:
         ['Fatura No', invoice.invoice_number or '-'],
         ['Kesim Tarihi', _date(invoice.issued_date)],
         ['Vade Tarihi', _date(due_date)],
-        ['Satis No', f'#{invoice.sale_id}'],
+        ['Satis No', f'#{invoice.sale_id}' if invoice.sale_id else '-'],
         ['Durum', STATUS_LABELS.get(invoice.status, invoice.status or '-')],
     ]
     info_table = Table(invoice_rows, colWidths=[24 * mm, 50 * mm])

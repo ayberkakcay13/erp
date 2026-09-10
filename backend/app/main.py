@@ -8,9 +8,10 @@ from .database import test_connection
 from .models import DocumentImmutableError, LedgerImmutableError
 from .services import audit_service, tenant_context
 from .routers import (
-    audit, auth, catalog, customers, invoices, naming_series, products,
-    purchase_invoices, purchase_orders, purchase_receipts, reports, sales,
-    stock, suppliers, tenants, transfers, users, warehouses,
+    audit, auth, catalog, credit, customers, delivery_notes, invoices,
+    naming_series, products, purchase_invoices, purchase_orders,
+    purchase_receipts, quotations, reports, sales, sales_orders, stock,
+    suppliers, tenants, transfers, users, warehouses,
 )
 
 app = FastAPI(
@@ -52,6 +53,10 @@ app.include_router(purchase_orders.router)
 app.include_router(purchase_orders.match_router)
 app.include_router(purchase_receipts.router)
 app.include_router(purchase_invoices.router)
+app.include_router(quotations.router)
+app.include_router(sales_orders.router)
+app.include_router(delivery_notes.router)
+app.include_router(credit.router)
 
 
 @app.middleware('http')
