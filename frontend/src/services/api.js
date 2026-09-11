@@ -75,6 +75,10 @@ export const customerAPI = {
   create: (data) => unwrap(api.post('/api/customers', data)),
   update: (id, data) => unwrap(api.put(`/api/customers/${id}`, data)),
   delete: (id) => unwrap(api.delete(`/api/customers/${id}`)),
+  // Phase 18: detay modal'i (mock veri, Phase 19'da gercek sorguya donecek)
+  orders: (id, status) => unwrap(api.get(`/api/customers/${id}/orders`, { params: { status } })),
+  salesTrend: (id, range, date) =>
+    unwrap(api.get(`/api/customers/${id}/sales-trend`, { params: { range, date } })),
 };
 
 export const productAPI = {
@@ -92,6 +96,10 @@ export const productAPI = {
   addBarcode: (id, data) => unwrap(api.post(`/api/products/${id}/barcodes`, data)),
   deleteBarcode: (id, barcodeId) =>
     unwrap(api.delete(`/api/products/${id}/barcodes/${barcodeId}`)),
+  // Phase 18: detay modal'i (mock veri, Phase 19'da gercek sorguya donecek)
+  orders: (id, status) => unwrap(api.get(`/api/products/${id}/orders`, { params: { status } })),
+  salesTrend: (id, range, date) =>
+    unwrap(api.get(`/api/products/${id}/sales-trend`, { params: { range, date } })),
 };
 
 // ---------------- Phase 13: urun yapisi ----------------
@@ -142,6 +150,11 @@ export const salesAPI = {
   submit: (id) => unwrap(api.post(`/api/sales/${id}/submit`)),
   cancel: (id, reason) => unwrap(api.post(`/api/sales/${id}/cancel`, { reason })),
   remove: (id) => unwrap(api.delete(`/api/sales/${id}`)),
+  // Phase 18: Dashboard (mock veri, Phase 19'da gercek sorguya donecek)
+  trend: (range, date) => unwrap(api.get('/api/sales/trend', { params: { range, date } })),
+  recent: (page, perPage) =>
+    unwrap(api.get('/api/sales/recent', { params: { page, per_page: perPage } })),
+  recentOrders: () => unwrap(api.get('/api/sales/recent-orders')),
 };
 
 export const invoiceAPI = {

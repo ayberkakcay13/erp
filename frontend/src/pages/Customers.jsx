@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import CustomerDetailModal from '../components/Customers/CustomerDetailModal';
 import CustomerForm from '../components/CustomerForm';
 import FilterBar, { FilterField, SearchInput, SortableTh } from '../components/FilterBar';
 import {
@@ -20,6 +21,7 @@ export default function Customers() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [notice, setNotice] = useState('');
+  const [detail, setDetail] = useState(null);
   const { isAdmin } = useAuth();
 
   // Phase 8: arama ve siralama (frontend'de, her tusta backend'e istek atmadan)
@@ -160,12 +162,20 @@ export default function Customers() {
             </thead>
             <tbody>
               {visible.map((c) => (
-                <tr key={c.id} data-testid={`customer-row-${c.id}`} className="border-t border-gray-100">
+                <tr
+                  key={c.id}
+                  data-testid={`customer-row-${c.id}`}
+                  onClick={() => setDetail(c)}
+                  className="border-t border-gray-100 cursor-pointer hover:bg-gray-50"
+                >
                   <td className="px-4 py-2 text-gray-800">{c.name}</td>
                   <td className="px-4 py-2 text-gray-600">{c.email}</td>
                   <td className="px-4 py-2 text-gray-600">{c.phone || '-'}</td>
                   <td className="px-4 py-2 text-gray-500">{formatDate(c.created_at)}</td>
-                  <td className="px-4 py-2 text-right whitespace-nowrap">
+                  <td
+                    className="px-4 py-2 text-right whitespace-nowrap"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <Button
                       variant="secondary"
                       onClick={() => openEdit(c)}
@@ -187,6 +197,8 @@ export default function Customers() {
           </table>
         </div>
       )}
+
+      {detail && <CustomerDetailModal customer={detail} onClose={() => setDetail(null)} />}
     </div>
   );
 }

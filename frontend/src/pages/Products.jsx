@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import FilterBar, { FilterField, SearchInput, SelectFilter, SortableTh } from '../components/FilterBar';
+import ProductDetailModal from '../components/Products/ProductDetailModal';
 import ProductForm from '../components/ProductForm';
 import ProductHistoryModal from '../components/ProductHistoryModal';
 import {
@@ -81,6 +82,7 @@ export default function Products() {
   const [notice, setNotice] = useState('');
   const { isAdmin } = useAuth();
   const [historyId, setHistoryId] = useState(null);
+  const [detail, setDetail] = useState(null);
 
   // Phase 8: arama, stok filtresi, siralama
   // Phase 9 entegrasyonu: uyari panelinden /products?stock=low ile gelinebiliyor
@@ -355,7 +357,8 @@ export default function Products() {
                 <tr
                   key={p.id}
                   data-testid={`product-row-${p.id}`}
-                  className={`border-t border-gray-100 ${
+                  onClick={() => setDetail(p)}
+                  className={`border-t border-gray-100 cursor-pointer hover:bg-gray-50 ${
                     qty(p.stock) <= 0
                       ? 'bg-red-50'
                       : qty(p.stock) < LOW_STOCK
@@ -380,7 +383,10 @@ export default function Products() {
                     {formatQty(p.stock)}
                   </td>
                   <td className="px-4 py-2">{stockBadge(p.stock)}</td>
-                  <td className="px-4 py-2 text-right whitespace-nowrap">
+                  <td
+                    className="px-4 py-2 text-right whitespace-nowrap"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <Button
                       variant="secondary"
                       className="mr-2"
@@ -417,6 +423,8 @@ export default function Products() {
       {historyId && (
         <ProductHistoryModal productId={historyId} onClose={() => setHistoryId(null)} />
       )}
+
+      {detail && <ProductDetailModal product={detail} onClose={() => setDetail(null)} />}
     </div>
   );
 }

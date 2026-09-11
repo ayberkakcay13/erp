@@ -23,7 +23,7 @@ from ..schemas import (
     ProductResponse,
     ProductUpdate,
 )
-from ..services import product_service, stock_service, uom_service
+from ..services import product_service, sales_query_service, stock_service, uom_service
 
 router = APIRouter(
     prefix='/api/products',
@@ -405,3 +405,27 @@ def delete_product(
         db.rollback()
         raise HTTPException(status_code=500, detail=f'Veritabani hatasi: {exc}')
     return None
+
+
+# --- Phase 19: urun detay modal'i (gercek sales_order_items sorgusu) ---
+
+@router.get('/{product_id}/orders')
+def get_product_orders(
+    product_id: int,
+    status: str | None = Query(None, description='pending | processing | delivered'),
+    db: Session = Depends(get_db),
+):
+    """Urune ait siparisler (ProductDetailModal - Devam Eden/Son Siparisler sekmeleri)."""
+    return sales_query_service.get_product_orders(db, product_id, status)
+
+
+@router.get('/{product_id}/sales-trend')
+def get_product_sales_trend(
+    product_id: int,
+    range: str = Query('monthly', alias='range', description='daily | weekly | monthly | yearly'),
+    date: str | None = Query(None, description='ISO tarih, secili donemi belirler'),
+    db: Session = Depends(get_db),
+):
+    """Urun bazli satis trendi (ProductDetailModal - Satis Trendi sekmesi)."""
+    target = sales_query_service.parse_date(date)
+    return sales_query_service.get_sales_trend(db, range, target, product_id=product_id)
