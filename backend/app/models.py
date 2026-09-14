@@ -150,8 +150,9 @@ class SalesOrder(TenantMixin, Base):
     id = Column(Integer, primary_key=True)
     so_number = Column(String(50), nullable=True)
     quotation_id = Column(Integer, ForeignKey('quotations.id'), nullable=True)
-    customer_id = Column(Integer, ForeignKey('customers.id'), nullable=False)
-    sale_date = Column(Date, nullable=False)
+    # Phase 19: musteri detay modal'i customer_id + sale_date ile filtreler/gruplar
+    customer_id = Column(Integer, ForeignKey('customers.id'), nullable=False, index=True)
+    sale_date = Column(Date, nullable=False, index=True)
     promised_delivery_date = Column(Date, nullable=True)
     warehouse_id = Column(Integer, ForeignKey('warehouses.id'), nullable=True)
     subtotal = Column(Numeric(18, 4), nullable=True)
@@ -185,8 +186,9 @@ class SalesOrderItem(TenantMixin, Base):
     """Siparis kalemi (Phase 15 - eski SalesItem, ayni tablo id'leri)."""
     __tablename__ = 'sales_order_items'
     id = Column(Integer, primary_key=True)
-    sales_order_id = Column(Integer, ForeignKey('sales_orders.id'), nullable=False)
-    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
+    sales_order_id = Column(Integer, ForeignKey('sales_orders.id'), nullable=False, index=True)
+    # Phase 19: urun detay modal'i bu kolonla filtreler
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False, index=True)
     quantity = Column(Numeric(18, 4), nullable=False)
     unit_price = Column(Numeric(18, 4), nullable=False)
     tax_rate = Column(Numeric(18, 4), nullable=False, default=0)

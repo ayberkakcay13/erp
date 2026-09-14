@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import AlertsPanel from '../components/AlertsPanel';
-import DashboardCharts from '../components/DashboardCharts';
-import {
-  Badge,
-  ErrorMessage,
-  Loading,
-  PageHeader,
-  formatDate,
-  formatMoney,
-} from '../components/ui';
+import RecentOrdersTable from '../components/Dashboard/RecentOrdersTable';
+import SalesTrendChart from '../components/Dashboard/SalesTrendChart';
+import { ErrorMessage, Loading, PageHeader, formatMoney } from '../components/ui';
 import {
   customerAPI,
   invoiceAPI,
@@ -17,7 +11,6 @@ import {
   reportAPI,
   salesAPI,
 } from '../services/api';
-import { statusLabel, statusTone } from './Sales';
 
 function StatCard({ label, value, to, testid, hint }) {
   const card = (
@@ -69,7 +62,6 @@ export default function Dashboard() {
         revenue: sales.reduce((sum, s) => sum + Number(s.total_amount ?? 0), 0),
         lowStock: products.filter((p) => p.stock < 10).length,
         unpaidInvoices: invoices.filter((i) => i.status !== 'paid').length,
-        recentSales: [...sales].sort((a, b) => b.id - a.id).slice(0, 5),
       });
     } catch (err) {
       setError(err.message);
@@ -141,46 +133,11 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Phase 6: ciro ozeti + aylik trend + en cok satan urunler */}
-      <DashboardCharts />
+      {/* Phase 16: satis trendi grafigi (4 mod + tarih nav) + son 10 satis tablosu (mock veri) */}
+      <SalesTrendChart />
 
-      <h3 className="text-sm font-medium text-gray-700 mb-2">Son Satislar</h3>
-      {data.recentSales.length === 0 ? (
-        <div className="text-sm text-gray-500">Henuz satis yok.</div>
-      ) : (
-        <div className="bg-white border border-gray-200 rounded overflow-x-auto">
-          <table className="w-full text-sm" data-testid="recent-sales">
-            <thead className="bg-gray-50 text-gray-600">
-              <tr>
-                <th className="text-left px-4 py-2 font-medium">No</th>
-                <th className="text-left px-4 py-2 font-medium">Musteri</th>
-                <th className="text-left px-4 py-2 font-medium">Tarih</th>
-                <th className="text-right px-4 py-2 font-medium">Tutar</th>
-                <th className="text-left px-4 py-2 font-medium">Durum</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.recentSales.map((s) => (
-                <tr key={s.id} className="border-t border-gray-100">
-                  <td className="px-4 py-2">
-                    <Link to={`/sales/${s.id}`} className="text-indigo-600 hover:underline">
-                      #{s.id}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-2 text-gray-800">{s.customer?.name ?? '-'}</td>
-                  <td className="px-4 py-2 text-gray-600">{formatDate(s.sale_date)}</td>
-                  <td className="px-4 py-2 text-right font-medium">{formatMoney(s.total_amount)}</td>
-                  <td className="px-4 py-2">
-                    <Badge tone={statusTone[s.status] ?? 'gray'}>
-                      {statusLabel[s.status] ?? s.status}
-                    </Badge>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* Phase 16: musteri siparisleri tablosu (mock veri) */}
+      <RecentOrdersTable />
     </div>
   );
 }

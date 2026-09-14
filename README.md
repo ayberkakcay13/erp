@@ -18,6 +18,11 @@ FastAPI + React + Supabase ile çok kiracılı (multi-tenant) ERP sistemi.
 - ✅ **Çok kiracılı mimari + PostgreSQL RLS** (Phase 12)
 - ✅ **Ölçü birimi, kategori, marka, barkod, varyant** (Phase 13)
 - ✅ **Tedarikçi ve satın alma: sipariş → mal kabul → alış faturası** (Phase 14)
+- ✅ **Satış zinciri: teklif → satış siparişi → irsaliye → fatura** (Phase 15)
+- ✅ **Dashboard: satış trendi grafiği, son satışlar/siparişler tablosu** (Phase 16)
+- ✅ **Müşteri/ürün detay pencereleri (3 sekme: siparişler + satış trendi)** (Phase 17)
+- ✅ **Detay pencereleri backend'e bağlandı + test kapsamı genişletildi** (Phase 18)
+- ✅ **Mock veri → gerçek `sales_orders` sorgusuna geçiş (production-ready API)** (Phase 19)
 
 ## Mimari notlar
 
@@ -80,8 +85,60 @@ yazılır; iptalde `alim_iade` ters kaydı düşer. Aynı anda sipariş kalemini
 `kismi_teslim` / `tamamlandi`) yeniden hesaplanır — bu alan senkron kalmazsa
 kısmi teslim hesabı bozulur.
 
-Ledger satırına `unit_cost` (stok birimi başına maliyet) yazılır; Phase 16'daki
-stok değerlemesi (FIFO / hareketli ortalama) buna dayanacak.
+Ledger satırına `unit_cost` (stok birimi başına maliyet) yazılır; ileride
+eklenecek stok değerlemesi (FIFO / hareketli ortalama) buna dayanacak.
+
+### Satış zinciri refactoring (Phase 15)
+Eski `sales`/`sales_items` tabloları `sales_orders`/`sales_order_items` olarak
+yeniden adlandırıldı (id'ler korunarak — `stock_ledger_entries` ve
+`audit_logs` bu id'lere referans veriyor). `app/models.py` içinde
+`Sale = SalesOrder`, `SalesItem = SalesOrderItem` **Python alias'ları** vardır;
+ayrı tablo değildir, yalnızca Phase 10-14 kodunun eski isimlerle çalışmaya
+devam etmesi içindir. `routers/sales.py` (`/api/sales`) geriye uyum katmanı,
+yeni geliştirme `routers/sales_orders.py` + `quotations.py` +
+`delivery_notes.py` üzerinden yapılır.
+
+### Dashboard + detay pencereleri (Phase 16-19)
+Dashboard'daki satış trendi grafiği (4 zaman aralığı + tarih navigasyonu) ve
+Müşteriler/Ürünler sayfalarındaki satır tıklamasıyla açılan detay pencereleri
+(Devam Eden Siparişler / Son Siparişler / Satış Trendi sekmeleri) **mock veriyle**
+başladı (Phase 16-17), Phase 18'de mock veri backend'e taşındı
+(`app/mocks/`), Phase 19'da bu katman **kaldırılıp gerçek `sales_orders` /
+`sales_order_items` sorgularıyla** değiştirildi:
+
+- `GET /api/customers/{id}/orders`, `/api/customers/{id}/sales-trend`
+- `GET /api/products/{id}/orders`, `/api/products/{id}/sales-trend`
+- `GET /api/sales/trend`, `/api/sales/recent`, `/api/sales/recent-orders`
+
+Sorgu mantığı `app/services/sales_query_service.py`'de toplanır ve **mevcut
+SQLAlchemy `Session`** (`get_db()`) üzerinden çalışır — repo'da supabase-py/REST
+client yok, tenant izolasyonu (Phase 12) zaten bu session'a bağlı
+`SET LOCAL ROLE erp_app` + RLS ile sağlanıyor; ayrı bir Supabase client bu
+izolasyonu bypass ederdi.
+
+Önemli tasarım kararları:
+- **Teslimat tarihi** kaynağı `SalesOrder.promised_delivery_date` (planlanan
+  teslimat) — yeni bir kolon eklenmedi, mevcut alan yeniden kullanıldı.
+- Bir sipariş birden çok ürün satırı (`SalesOrderItem`) içerebilir: müşteri
+  modalında **sipariş başına 1 satır** (ürün kolonu "ilk ürün + N urun"),
+  ürün modalında **kalem başına 1 satır** (tutar o kalemin satır toplamı).
+- Gerçek `SalesOrder.status` değerleri (`draft/pending/confirmed/
+  partially_delivered/delivered/completed/cancelled`) UI'nin üç durumlu
+  (pending/processing/delivered) rozet sistemine `sales_query_service._STATUS_MAP`
+  ile eşlenir; `cancelled` siparişler sipariş listelerinden tamamen hariç
+  tutulur (asıl mock tasarımıyla aynı davranış).
+- `customer_id`/`sale_date` (sales_orders) ve `product_id`/`sales_order_id`
+  (sales_order_items) için indeks eklendi (`migrate_phase19_indexes.py`,
+  idempotent) — bu sorgular artık sık çalışıyor.
+
+Frontend tarafında `frontend/src/hooks/` altında `useCustomerOrders`,
+`useProductOrders`, `useSalesTrend` hook'ları eklendi; bunlar **çıplak
+`fetch()` kullanmaz**, mevcut `services/api.js` (axios, Bearer token + hata
+normalizasyonu) üzerinden geçer.
+
+⚠️ `/api/sales/trend`, `/api/sales/recent`, `/api/sales/recent-orders` aynı
+router'daki `/api/sales/{sale_id}`'den **önce** tanımlıdır — aksi halde
+FastAPI bu sabit yolları `sale_id` path parametresi sanıp 422 döner.
 
 ## Kurulum
 
@@ -102,7 +159,15 @@ env\Scripts\python.exe migrate_phase11_documents.py   # Phase 11
 env\Scripts\python.exe migrate_phase12_tenant.py      # Phase 12
 env\Scripts\python.exe migrate_phase13_catalog.py     # Phase 13
 env\Scripts\python.exe migrate_phase14_purchase.py    # Phase 14
+env\Scripts\python.exe migrate_phase15_sales.py       # Phase 15
+env\Scripts\python.exe migrate_phase19_indexes.py     # Phase 19 (indeks, tablo eklemez)
 ```
+
+Phase 16-18 yeni tablo/migration eklemedi. Phase 19 de yeni tablo eklemedi —
+sadece mevcut `sales_orders`/`sales_order_items` üzerine indeks ekledi; şema
+zaten Phase 15'ten beri yeterliydi (Notion Phase 19 spec'i "sales_orders/
+customers/products tabloları oluştur" diyordu, ama bunlar Phase 10-15'te
+zaten mevcuttu — kontrol edildi, eksik tablo yoktu).
 
 ### Frontend
 ```bash
@@ -116,11 +181,24 @@ npm start
 ```bash
 cd backend
 env\Scripts\python.exe -m pytest              # faz testleri (pytest)
+env\Scripts\python.exe -m pytest --cov=app tests/  # coverage raporu
 env\Scripts\python.exe tests/full_flow_test.py  # uçtan uca (sunucu açıkken)
 ```
 
-Testler gerçek Supabase veritabanına karşı koşar ve oluşturdukları her kaydı
-temizler — production tablolarında test verisi bırakmazlar.
+```bash
+cd frontend
+npm test -- --watchAll=false   # Jest + React Testing Library
+```
+
+Backend testleri gerçek Supabase veritabanına karşı koşar ve oluşturdukları her
+kaydı temizler — production tablolarında test verisi bırakmazlar. Phase 19'da
+`/api/customers/{id}/orders` gibi endpoint'ler artık gerçek veri döndürdüğü
+için testleri de gerçek `client`+`tracker` deseniyle kendi müşteri/ürün/
+siparişini oluşturup doğrular (Phase 18'in "mock veri hep dolu döner"
+varsayımına dayanan testleri kaldırıldı).
+
+API dokümantasyonu ayrıca yazılmadı — FastAPI zaten `uvicorn` çalışırken
+`/docs` (Swagger UI) ve `/openapi.json`'ı otomatik üretir.
 
 ## Durum
-🚀 Phase 14 tamamlandı — aktif geliştirme
+🚀 Phase 19 tamamlandı — aktif geliştirme

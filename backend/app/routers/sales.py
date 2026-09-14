@@ -24,7 +24,7 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import Customer, DeliveryNote, DeliveryNoteItem, DocStatus, Product, Sale, SalesItem, User
 from ..schemas import CancelRequest, SaleCreate, SaleResponse, SaleStatusUpdate
-from ..services import credit_service, document_service, stock_service, uom_service
+from ..services import credit_service, document_service, sales_query_service, stock_service, uom_service
 from ..services.tenant_service import require_module
 
 router = APIRouter(
@@ -289,6 +289,37 @@ def list_sales(
         query = query.filter(Sale.customer_id == customer_id)
     sales = query.order_by(Sale.id).offset(skip).limit(limit).all()
     return [_serialize(sale) for sale in sales]
+
+
+# --- Phase 19: Dashboard gercek veri sorgulari ---
+# UYARI: bu uc route /{sale_id}'den ONCE tanimlanmali - yoksa FastAPI
+# "trend"/"recent"/"recent-orders" degerlerini sale_id int parametresi sanip 422 doner.
+
+@router.get('/trend')
+def get_sales_trend(
+    range: str = Query('monthly', alias='range', description='daily | weekly | monthly | yearly'),
+    date: str | None = Query(None, description='ISO tarih, secili donemi belirler'),
+    db: Session = Depends(get_db),
+):
+    """Dashboard genel satis trendi (SalesTrendChart - 4 mod + tarih nav)."""
+    target = sales_query_service.parse_date(date)
+    return sales_query_service.get_sales_trend(db, range, target)
+
+
+@router.get('/recent')
+def get_recent_sales(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(5, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    """Dashboard 'Son 10 Satis' tablosu, sayfali."""
+    return sales_query_service.get_recent_sales(db, page, per_page)
+
+
+@router.get('/recent-orders')
+def get_recent_orders(db: Session = Depends(get_db)):
+    """Dashboard 'Musteri Siparisleri' tablosu (en yeni 15 kayit, sayfalama yok)."""
+    return sales_query_service.get_recent_orders(db, limit=15)
 
 
 @router.get('/{sale_id}', response_model=SaleResponse)

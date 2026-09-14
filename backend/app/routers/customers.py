@@ -7,6 +7,7 @@ from ..auth import get_current_user, require_admin
 from ..database import get_db
 from ..models import Customer, User
 from ..schemas import CustomerCreate, CustomerResponse, CustomerUpdate
+from ..services import sales_query_service
 
 router = APIRouter(
     prefix='/api/customers',
@@ -83,3 +84,27 @@ def delete_customer(
         db.rollback()
         raise HTTPException(status_code=500, detail=f'Veritabani hatasi: {exc}')
     return None
+
+
+# --- Phase 19: musteri detay modal'i (gercek sales_orders sorgusu) ---
+
+@router.get('/{customer_id}/orders')
+def get_customer_orders(
+    customer_id: int,
+    status: str | None = Query(None, description='pending | processing | delivered'),
+    db: Session = Depends(get_db),
+):
+    """Musteriye ait siparisler (CustomerDetailModal - Devam Eden/Son Siparisler sekmeleri)."""
+    return sales_query_service.get_customer_orders(db, customer_id, status)
+
+
+@router.get('/{customer_id}/sales-trend')
+def get_customer_sales_trend(
+    customer_id: int,
+    range: str = Query('monthly', alias='range', description='daily | weekly | monthly | yearly'),
+    date: str | None = Query(None, description='ISO tarih, secili donemi belirler'),
+    db: Session = Depends(get_db),
+):
+    """Musteri bazli satis trendi (CustomerDetailModal - Satis Trendi sekmesi)."""
+    target = sales_query_service.parse_date(date)
+    return sales_query_service.get_sales_trend(db, range, target, customer_id=customer_id)
